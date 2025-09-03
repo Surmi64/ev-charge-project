@@ -33,5 +33,5 @@ jobs:
           IMAGE_TAG=192.168.0.242:32000/my-backend:${GITHUB_REF_NAME}-${COMMIT_HASH}
           docker build -t $IMAGE_TAG ./backend
           docker push $IMAGE_TAG
-          docker tag $IMAGE_TAG 192.168.0.242:32000/my-backend:latest
-          docker push 192.168.0.242:32000/my-backend:latest
+          docker tag $IMAGE_TAG 192.168.0.242:32000/ev-backend:latest
+          docker push 192.168.0.242:32000/ev-backend:latest
