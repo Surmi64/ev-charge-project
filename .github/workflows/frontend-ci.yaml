@@ -1,0 +1,37 @@
+name: Frontend CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+  pull_request:
+    paths:
+      - 'frontend/**'
+
+jobs:
+  build-and-push-frontend:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get short commit hash
+        id: vars
+        run: echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Log in to local registry
+        run: |
+          echo ${{ secrets.LOCAL_REGISTRY_PASSWORD }} | docker login 192.168.0.242:32000 -u ${{ secrets.LOCAL_REGISTRY_USERNAME }} --password-stdin
+
+      - name: Build & Push Frontend Image
+        run: |
+          IMAGE_TAG=192.168.0.242:32000/my-frontend:${GITHUB_REF_NAME}-${COMMIT_HASH}
+          docker build -t $IMAGE_TAG ./frontend
+          docker push $IMAGE_TAG
+          docker tag $IMAGE_TAG 192.168.0.242:32000/my-frontend:latest
+          docker push 192.168.0.242:32000/my-frontend:latest
