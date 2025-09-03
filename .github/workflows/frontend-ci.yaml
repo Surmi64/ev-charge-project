@@ -30,8 +30,8 @@ jobs:
 
       - name: Build & Push Frontend Image
         run: |
-          IMAGE_TAG=192.168.0.242:32000/my-frontend:${GITHUB_REF_NAME}-${COMMIT_HASH}
+          IMAGE_TAG=192.168.0.242:32000/ev-frontend:${GITHUB_REF_NAME}-${COMMIT_HASH}
           docker build -t $IMAGE_TAG ./frontend
           docker push $IMAGE_TAG
-          docker tag $IMAGE_TAG 192.168.0.242:32000/my-frontend:latest
-          docker push 192.168.0.242:32000/my-frontend:latest
+          docker tag $IMAGE_TAG 192.168.0.242:32000/ev-frontend:latest
+          docker push 192.168.0.242:32000/ev-frontend:latest
