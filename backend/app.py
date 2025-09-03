@@ -108,7 +108,6 @@ def update_charging_session(session_id):
 
     set_clause = ", ".join([f"{col} = %s" for col in updates.keys()])
     values = list(updates.values())
-
     conn = get_db_connection()
     cur = conn.cursor()
     try:
