@@ -85,6 +85,22 @@ There are manifest stubs in the `k8s/` folder but they are still under developme
 - Replace in-repo DB with a managed DB or a production-grade Postgres StatefulSet.
 - Add Secrets for DB credentials and configure liveness/readiness probes.
 
+
+## Architecture Flowchart
+```mermaid
+flowchart TD
+    A[Developer] -->|Commit & Push| B[GitHub Repo];
+    B -->|Trigger Workflow<br>(frontend.yaml / backend.yaml)| C[GitHub Actions CI/CD];
+    C -->|docker build backend<br>docker push ev-backend:commit & latest| D[Docker Registry<br>(192.168.0.242:32000)];
+    C -->|docker build frontend<br>docker push ev-frontend:commit & latest| D;
+    C -->|Update k8s manifests<br>(image tag)| B2[Manifests Repo];
+    B2 -->|GitOps Sync| E[ArgoCD];
+    E -->|Apply Deployment/Service| F[Kubernetes Cluster];
+    F -->|Pull image| D;
+    F -->|Run pods új verzióval| G[Deployed App 🚀];
+    G -->|Elérhető az új verzió| A;
+```
+
 ## Troubleshooting
 
 - If the frontend cannot reach the backend: confirm `VITE_API_URL` matches the backend address and that the backend is reachable from your browser.
