@@ -86,7 +86,7 @@ There are manifest stubs in the `k8s/` folder but they are still under developme
 - Add Secrets for DB credentials and configure liveness/readiness probes.
 
 
-## Architecture Flowchart
+## CI/CD Architecture Flowchart
 ```mermaid
 flowchart TD
     dev["`Developer commits
