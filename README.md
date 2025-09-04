@@ -123,11 +123,10 @@ flowchart TD
     ci --> manifests
     manifests --> argocd
     argocd --> k8s
-    k8s --> registry
+    registry --> k8s
     k8s --> pods
     pods --> deployed
     deployed --> dev
-
 ```
 
 ## Troubleshooting
