@@ -89,16 +89,35 @@ There are manifest stubs in the `k8s/` folder but they are still under developme
 ## Architecture Flowchart
 ```mermaid
 flowchart TD
-    A[Developer] -->|Commit & Push| B[GitHub Repo]
-    B -->|Trigger Workflow: frontend.yaml or backend.yaml| C[GitHub Actions CI/CD]
-    C -->|Build & Push backend: commit & latest| D[Docker Registry 192.168.0.242:32000]
-    C -->|Build & Push frontend: commit & latest| D
-    C -->|Update k8s manifests: image tag| B2[Manifests Repo]
-    B2 -->|GitOps Sync| E[ArgoCD]
-    E -->|Apply Deployment/Service| F[Kubernetes Cluster]
-    F -->|Pull image| D
-    F -->|Run pods with new version| G[Deployed App 🚀]
-    G -->|New version available| A
+    dev["`Developer commits
+    & pushes code`"] 
+    repo["GitHub Repo"]
+    ci["`GitHub Actions CI/CD
+    frontend.yaml
+    backend.yaml`"]
+    backendBuild["Build backend image\nPush to registry: commit & latest"]
+    frontendBuild["Build frontend image\nPush to registry: commit & latest"]
+    registry["Docker Registry\n192.168.0.242:32000"]
+    manifests["Update k8s manifests\nwith new image tag"]
+    argocd["ArgoCD\nGitOps Sync"]
+    k8s["Kubernetes Cluster\nDeploy / Service"]
+    pods["Run pods with new version"]
+    deployed["Deployed App 🚀\nNew version live"]
+
+    dev --> repo
+    repo --> ci
+    ci --> backendBuild
+    ci --> frontendBuild
+    backendBuild --> registry
+    frontendBuild --> registry
+    ci --> manifests
+    manifests --> argocd
+    argocd --> k8s
+    k8s --> registry
+    k8s --> pods
+    pods --> deployed
+    deployed --> dev
+
 ```
 
 ## Troubleshooting
