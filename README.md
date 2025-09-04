@@ -95,14 +95,24 @@ flowchart TD
     ci["`GitHub Actions CI/CD
     frontend.yaml
     backend.yaml`"]
-    backendBuild["Build backend image\nPush to registry: commit & latest"]
-    frontendBuild["Build frontend image\nPush to registry: commit & latest"]
-    registry["Docker Registry\n192.168.0.242:32000"]
-    manifests["Update k8s manifests\nwith new image tag"]
-    argocd["ArgoCD\nGitOps Sync"]
-    k8s["Kubernetes Cluster\nDeploy / Service"]
-    pods["Run pods with new version"]
-    deployed["Deployed App 🚀\nNew version live"]
+    backendBuild["`Build backend image
+    Push to registry:
+    commit-hash & latest`"]
+    frontendBuild["`Build frontend image
+    Push to registry:
+    commit-hash & latest`"]
+    registry["`k8s Private Docker Registry
+    192.168.0.242:32000`"]
+    manifests["`Update k8s manifests
+    with new image tag`"]
+    argocd["`ArgoCD
+    GitOps Sync`"]
+    k8s["`Kubernetes Cluster
+    Deployment`"]
+    pods["`Run pods with
+    new version`"]
+    deployed["`Deployed App 🚀
+    New version live`"]
 
     dev --> repo
     repo --> ci
