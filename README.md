@@ -126,7 +126,6 @@ flowchart TD
     registry --> k8s
     k8s --> pods
     pods --> deployed
-    deployed --> dev
 ```
 
 ## Troubleshooting
