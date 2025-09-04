@@ -90,15 +90,15 @@ There are manifest stubs in the `k8s/` folder but they are still under developme
 ```mermaid
 flowchart TD
     A[Developer] -->|Commit & Push| B[GitHub Repo]
-    B -->|Trigger Workflow (frontend.yaml / backend.yaml)| C[GitHub Actions CI/CD]
+    B -->|Trigger Workflow: frontend.yaml or backend.yaml| C[GitHub Actions CI/CD]
     C -->|Build & Push backend: commit & latest| D[Docker Registry 192.168.0.242:32000]
     C -->|Build & Push frontend: commit & latest| D
-    C -->|Update k8s manifests (image tag)| B2[Manifests Repo]
+    C -->|Update k8s manifests: image tag| B2[Manifests Repo]
     B2 -->|GitOps Sync| E[ArgoCD]
     E -->|Apply Deployment/Service| F[Kubernetes Cluster]
     F -->|Pull image| D
-    F -->|Run pods új verzióval| G[Deployed App 🚀]
-    G -->|Elérhető az új verzió| A
+    F -->|Run pods with new version| G[Deployed App 🚀]
+    G -->|New version available| A
 ```
 
 ## Troubleshooting
