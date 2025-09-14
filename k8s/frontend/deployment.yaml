@@ -6,7 +6,7 @@ metadata:
   labels:
     app: ev-frontend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: ev-frontend
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: http://192.168.0.242:32000/ev-frontend:latest
+        image: 192.168.0.242:32000/ev-frontend:latest
         ports:
         - containerPort: 80
         env:
