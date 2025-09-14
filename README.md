@@ -85,12 +85,12 @@ There are manifest stubs in the `k8s/` folder but they are still under developme
 - Replace in-repo DB with a managed DB or a production-grade Postgres StatefulSet.
 - Add Secrets for DB credentials and configure liveness/readiness probes.
 
-
 ## CI/CD Architecture Flowchart
+
 ```mermaid
 flowchart TD
     dev["`Developer commits
-    & pushes code`"] 
+    & pushes code`"]
     repo["GitHub Repo"]
     ci["`GitHub Actions CI/CD
     frontend.yaml
@@ -138,6 +138,8 @@ flowchart TD
 - Finish and validate Kubernetes manifests in `k8s/`.
 - Add CI for linting, tests and container image builds.
 - Add DB migrations (Alembic or similar) and seed data.
+- Make container registry persistent
+- Make ArgoCD persistent
 
 ## License
 

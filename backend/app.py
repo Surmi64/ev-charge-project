@@ -127,5 +127,6 @@ def update_charging_session(session_id):
 
     return jsonify({"status": "success"}), 200
 
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5555, debug=False)
