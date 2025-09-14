@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-frontend
+  namespace: default
+  labels:
+    app: ev-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ev-frontend
+  template:
+    metadata:
+      labels:
+        app: ev-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: 192.168.0.242:32000/ev-frontend:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: VITE_API_URL
+          value: "http://ev-backend:5555"
+      imagePullSecrets:
+      - name: registry-auth

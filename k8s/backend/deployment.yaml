@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-backend
+  namespace: default
+  labels:
+    app: ev-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ev-backend
+  template:
+    metadata:
+      labels:
+        app: ev-backend
+    spec:
+      containers:
+      - name: backend
+        image: 192.168.0.242:32000/ev-backend:latest
+        ports:
+        - containerPort: 5555
+      imagePullSecrets:
+      - name: registry-auth
+      env:
+      - name: DB_HOST
+        value: "192.168.0.111"
+      - name: DB_PORT
+        value: "5432"
+      - name: DB_NAME
+        value: "ev_charger"
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: db-credentials
+            key: DB_USER
+      - name: DB_PASS
+        valueFrom:
+          secretKeyRef:
+            name: db-credentials
+            key: DB_PASS
