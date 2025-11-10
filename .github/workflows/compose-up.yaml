@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
   workflow_dispatch:
 
 jobs:
@@ -17,17 +20,12 @@ jobs:
 
       - name: Clean up old containers
         run: |
-          docker compose down -v || true
-          docker system prune -af || true
+          docker compose -f ./docker-compose-example.yaml down
 
-      - name: Build all services (no cache)
+      - name: Build all services (no cache) and start stack detached
         run: |
-          docker compose build --no-cache
-
-      - name: Start stack in detached mode
-        run: |
-          docker compose up -d
+          docker compose -f ./docker-compose-example.yaml up -d --build
 
       - name: Check running containers
         run: |
-          docker ps
+          docker ps -a
