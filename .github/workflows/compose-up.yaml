@@ -1,0 +1,33 @@
+name: Build and Run Docker Compose Stack
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    name: Build & Run Compose Stack
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clean up old containers
+        run: |
+          docker compose down -v || true
+          docker system prune -af || true
+
+      - name: Build all services (no cache)
+        run: |
+          docker compose build --no-cache
+
+      - name: Start stack in detached mode
+        run: |
+          docker compose up -d
+
+      - name: Check running containers
+        run: |
+          docker ps
