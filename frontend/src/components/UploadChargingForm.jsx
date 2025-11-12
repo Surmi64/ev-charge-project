@@ -126,7 +126,14 @@ const UploadChargingForm = () => {
         boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
       }}
     >
-      <Grid container spacing={2}>
+      <Grid
+        container
+        spacing={2}
+        direction="column"
+        justifyContent="center"
+        alignItems="stretch"
+        padding={2}
+      >
         <div>
           <TextField
             select
@@ -231,6 +238,7 @@ const UploadChargingForm = () => {
             freeSolo
             options={noteOptions}
             value={notes}
+            minRows={4}
             onInputChange={(e, newValue) => setNotes(newValue)}
             renderInput={(params) => (
               <TextField
