@@ -1,0 +1,6 @@
+# CODEOWNERS
+# This file assigns code ownership for the entire repository.
+# Each line is a file pattern followed by one or more owners.
+# Format:  <pattern>  <owner>
+
+* @Surmi64
