@@ -109,7 +109,7 @@ const UploadChargingForm = () => {
       component="form"
       onSubmit={handleSubmit}
       sx={{
-        maxWidth: 700,
+        maxWidth: 900,
         margin: '0 auto',
         p: { xs: 2, sm: 4 },
         backgroundColor: '#fff',
@@ -118,7 +118,8 @@ const UploadChargingForm = () => {
       }}
     >
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        {/* ---------- Row 1: Vehicle, Start, End ---------- */}
+        <Grid item xs={12} md={4}>
           <TextField
             select
             label="Vehicle"
@@ -131,8 +132,8 @@ const UploadChargingForm = () => {
             ))}
           </TextField>
         </Grid>
-
-        <Grid item xs={12} md={6}>
+    
+        <Grid item xs={12} md={4}>
           <TextField
             type="datetime-local"
             label="Start Time"
@@ -142,8 +143,8 @@ const UploadChargingForm = () => {
             InputLabelProps={{ shrink: true }}
           />
         </Grid>
-
-        <Grid item xs={12} md={6}>
+    
+        <Grid item xs={12} md={4}>
           <TextField
             type="datetime-local"
             label="End Time"
@@ -153,16 +154,8 @@ const UploadChargingForm = () => {
             InputLabelProps={{ shrink: true }}
           />
         </Grid>
-
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="kWh"
-            fullWidth
-            value={kwh}
-            onChange={(e) => setKwh(e.target.value)}
-          />
-        </Grid>
-
+    
+        {/* ---------- Row 2: Duration, kWh ---------- */}
         <Grid item xs={12} md={6}>
           <TextField
             label="Duration (s)"
@@ -171,7 +164,17 @@ const UploadChargingForm = () => {
             onChange={(e) => setDuration(e.target.value)}
           />
         </Grid>
-
+    
+        <Grid item xs={12} md={6}>
+          <TextField
+            label="kWh"
+            fullWidth
+            value={kwh}
+            onChange={(e) => setKwh(e.target.value)}
+          />
+        </Grid>
+    
+        {/* ---------- Row 3: Cost, Currency ---------- */}
         <Grid item xs={12} md={6}>
           <TextField
             label="Cost"
@@ -183,19 +186,7 @@ const UploadChargingForm = () => {
             }}
           />
         </Grid>
-
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Price per kWh"
-            fullWidth
-            value={pricePerKwh}
-            onChange={(e) => setPricePerKwh(e.target.value)}
-            InputProps={{
-              startAdornment: <InputAdornment position="start">{currency}</InputAdornment>,
-            }}
-          />
-        </Grid>
-
+    
         <Grid item xs={12} md={6}>
           <TextField
             select
@@ -207,25 +198,25 @@ const UploadChargingForm = () => {
             {currencies.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
           </TextField>
         </Grid>
-
-        <Grid item xs={12} md={6}>
+    
+        {/* ---------- Row 4: Odometer, Notes ---------- */}
+        <Grid item xs={12} md={4}>
           <TextField
             label="Odometer (km)"
-            name="odometer"
             type="number"
+            fullWidth
             value={odometer}
             onChange={(e) => setOdometer(e.target.value)}
-            fullWidth
           />
         </Grid>
-        
-        <Grid item xs={12}>
+    
+        <Grid item xs={12} md={8}>
           <Autocomplete
             freeSolo
             options={noteOptions}
             value={notes}
             onInputChange={(e, newValue) => setNotes(newValue)}
-            sx={{ width: '100%' }} // ensure full width
+            sx={{ width: '100%' }}
             renderInput={(params) => (
               <TextField
                 {...params}
@@ -234,25 +225,25 @@ const UploadChargingForm = () => {
                 fullWidth
                 multiline
                 minRows={2}
-                InputProps={{
-                  ...params.InputProps,
-                  style: { fontSize: '1rem', paddingRight: '4px' }
-                }}
               />
             )}
             componentsProps={{
               paper: {
-                sx: {
-                  maxHeight: 300,
-                  width: '100%',
-                },
+                sx: { maxHeight: 300, width: '100%' },
               },
             }}
           />
         </Grid>
-
+    
+        {/* ---------- Row 5: Save Button ---------- */}
         <Grid item xs={12}>
-          <Button type="submit" variant="contained" color="primary" fullWidth>
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            fullWidth
+            sx={{ py: 1.5, fontSize: '1rem' }}
+          >
             Save
           </Button>
         </Grid>
@@ -262,6 +253,7 @@ const UploadChargingForm = () => {
 };
 
 export default UploadChargingForm;
+
 
 
 
