@@ -219,20 +219,35 @@ const UploadChargingForm = () => {
           />
         </Grid>
         
-        <Grid item xs={12} md={12}>
+        <Grid item xs={12}>
           <Autocomplete
             freeSolo
             options={noteOptions}
             value={notes}
             onInputChange={(e, newValue) => setNotes(newValue)}
+            sx={{ width: '100%' }} // ensure full width
             renderInput={(params) => (
               <TextField
                 {...params}
                 label="Notes"
                 placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
                 fullWidth
+                multiline
+                minRows={2}
+                InputProps={{
+                  ...params.InputProps,
+                  style: { fontSize: '1rem', paddingRight: '4px' }
+                }}
               />
             )}
+            componentsProps={{
+              paper: {
+                sx: {
+                  maxHeight: 300,
+                  width: '100%',
+                },
+              },
+            }}
           />
         </Grid>
 
@@ -247,5 +262,6 @@ const UploadChargingForm = () => {
 };
 
 export default UploadChargingForm;
+
 
 
