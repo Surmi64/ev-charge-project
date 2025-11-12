@@ -90,7 +90,25 @@ def get_charging_sessions():
 
     return jsonify(rows), 200
 
+@app.route('/charging_sessions/notes', methods=['GET'])
+def get_charging_session_notes():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("""
+            SELECT DISTINCT notes
+            FROM charging_sessions
+            WHERE notes IS NOT NULL AND TRIM(notes) <> ''
+            ORDER BY notes ASC
+        """)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    notes_list = [row['notes'] for row in rows]
 
+    return jsonify(notes_list), 200
+    
 @app.route('/charging_sessions/<session_id>', methods=['PUT'])
 def update_charging_session(session_id):
     data = request.json
@@ -130,3 +148,4 @@ def update_charging_session(session_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5555, debug=False)
+
