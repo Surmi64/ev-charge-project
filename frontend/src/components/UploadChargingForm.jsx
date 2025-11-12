@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, TextField, MenuItem, Button, Grid, InputAdornment
 } from '@mui/material';
+import Autocomplete from '@mui/material/Autocomplete';
 
 const vehicles = [
   { id: 1, label: 'SSA511' }
@@ -21,7 +22,27 @@ const UploadChargingForm = () => {
   const [currency, setCurrency] = useState('HUF');
   const [notes, setNotes] = useState('');
   const [odometer, setOdometer] = useState('');
+  const [noteOptions, setNoteOptions] = useState([]);
 
+  useEffect(() => {
+    const fetchNotes = async () => {
+      try {
+        const res = await fetch(`${API_URL}/charging_sessions/notes`);
+        if (!res.ok) throw new Error('Failed to fetch notes');
+        const data = await res.json();
+
+        // Expecting `data` as an array of note strings or objects like { notes: "..." }
+        const allNotes = data.map(n => (typeof n === 'string' ? n : n.notes)).filter(Boolean);
+        const uniqueNotes = [...new Set(allNotes)]; // remove duplicates
+        setNoteOptions(uniqueNotes);
+      } catch (err) {
+        console.error('Error fetching notes:', err);
+      }
+    };
+
+    fetchNotes();
+  }, []);
+  
   useEffect(() => {
     if (startTime && endTime) {
       const durationSeconds = (new Date(endTime) - new Date(startTime)) / 1000;
@@ -198,15 +219,20 @@ const UploadChargingForm = () => {
           />
         </Grid>
         
-        <Grid item xs={12} md={12}>
-          <TextField
-            label="Notes"
-            fullWidth
-            multiline
-            minRows={2}
+        <Grid item xs={12}>
+          <Autocomplete
+            freeSolo
+            options={noteOptions}
             value={notes}
-            placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
-            onChange={(e) => setNotes(e.target.value)}
+            onInputChange={(e, newValue) => setNotes(newValue)}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Notes"
+                placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
+                fullWidth
+              />
+            )}
           />
         </Grid>
 
@@ -221,3 +247,4 @@ const UploadChargingForm = () => {
 };
 
 export default UploadChargingForm;
+
