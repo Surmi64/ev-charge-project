@@ -134,7 +134,7 @@ const UploadChargingForm = () => {
         alignItems="stretch"
         padding={2}
       >
-        <div spacing={2}>
+        <div>
           <TextField
             select
             label="Vehicle"
@@ -150,7 +150,7 @@ const UploadChargingForm = () => {
           </TextField>
         </div>
 
-        <div spacing={2}>
+        <div>
           <TextField
             type="datetime-local"
             label="Start Time"
@@ -158,6 +158,7 @@ const UploadChargingForm = () => {
             value={startTime}
             onChange={(e) => setStartTime(e.target.value)}
             InputLabelProps={{ shrink: true }}
+            sx={{ mb: 2 }}
           />
           <TextField
             type="datetime-local"
@@ -166,6 +167,7 @@ const UploadChargingForm = () => {
             value={endTime}
             onChange={(e) => setEndTime(e.target.value)}
             InputLabelProps={{ shrink: true }}
+            sx={{ mb: 2 }}
           />
         </div>
 
@@ -175,6 +177,7 @@ const UploadChargingForm = () => {
             fullWidth
             value={kwh}
             onChange={(e) => setKwh(e.target.value)}
+            sx={{ mb: 2 }}
           />
 
           <TextField
@@ -182,6 +185,7 @@ const UploadChargingForm = () => {
             fullWidth
             value={duration}
             onChange={(e) => setDuration(e.target.value)}
+            sx={{ mb: 2 }}
           />
         </div>
         <div>
@@ -195,6 +199,7 @@ const UploadChargingForm = () => {
                 <InputAdornment position="start">{currency}</InputAdornment>
               ),
             }}
+            sx={{ mb: 2 }}
           />
 
           <TextField
@@ -207,6 +212,7 @@ const UploadChargingForm = () => {
                 <InputAdornment position="start">{currency}</InputAdornment>
               ),
             }}
+            sx={{ mb: 2 }}
           />
         </div>
         <div>
@@ -216,6 +222,7 @@ const UploadChargingForm = () => {
             fullWidth
             value={currency}
             onChange={(e) => setCurrency(e.target.value)}
+            sx={{ mb: 2 }}
           >
             {currencies.map((c) => (
               <MenuItem key={c} value={c}>
@@ -231,6 +238,7 @@ const UploadChargingForm = () => {
             value={odometer}
             onChange={(e) => setOdometer(e.target.value)}
             fullWidth
+            sx={{ mb: 2 }}
           />
         </div>
         <div>
@@ -246,6 +254,7 @@ const UploadChargingForm = () => {
                 label="Notes"
                 placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
                 fullWidth
+                sx={{ mb: 2 }}
               />
             )}
           />
