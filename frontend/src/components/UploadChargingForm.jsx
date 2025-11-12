@@ -71,7 +71,7 @@ const UploadChargingForm = () => {
     >
       <Grid container spacing={2} sx={{ flexWrap: "wrap" }}>
         {/* Row 1: Vehicle, Start, End */}
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={4} lg={4}>
           <TextField
             select
             label="Vehicle"
@@ -86,7 +86,7 @@ const UploadChargingForm = () => {
             ))}
           </TextField>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={4} lg={4}>
           <TextField
             type="datetime-local"
             label="Start Time"
@@ -96,7 +96,7 @@ const UploadChargingForm = () => {
             InputLabelProps={{ shrink: true }}
           />
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={4} lg={4}>
           <TextField
             type="datetime-local"
             label="End Time"
@@ -108,7 +108,7 @@ const UploadChargingForm = () => {
         </Grid>
 
         {/* Row 2: Duration, kWh */}
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={6} lg={6}>
           <TextField
             label="Duration (s)"
             fullWidth
@@ -116,7 +116,7 @@ const UploadChargingForm = () => {
             onChange={(e) => setDuration(e.target.value)}
           />
         </Grid>
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={6} lg={6}>
           <TextField
             label="kWh"
             fullWidth
@@ -126,7 +126,7 @@ const UploadChargingForm = () => {
         </Grid>
 
         {/* Row 3: Cost, Currency */}
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={6} lg={6} >
           <TextField
             label="Cost"
             fullWidth
@@ -139,7 +139,7 @@ const UploadChargingForm = () => {
             }}
           />
         </Grid>
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={6} lg={6}>
           <TextField
             select
             label="Currency"
@@ -156,7 +156,7 @@ const UploadChargingForm = () => {
         </Grid>
 
         {/* Row 4: Odometer, Notes */}
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={4} lg={6}>
           <TextField
             label="Odometer (km)"
             type="number"
@@ -165,7 +165,7 @@ const UploadChargingForm = () => {
             onChange={(e) => setOdometer(e.target.value)}
           />
         </Grid>
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={8} lg={6}>
           <Autocomplete
             freeSolo
             options={noteOptions}
@@ -178,12 +178,10 @@ const UploadChargingForm = () => {
                 placeholder="TEA Nyíregyháza Ledtechnika DC 60"
                 fullWidth
                 multiline
-                minRows={2}
+                minRows={3}
+                
               />
             )}
-            componentsProps={{
-              paper: { sx: { maxHeight: 300, width: "100%" } },
-            }}
           />
         </Grid>
 
@@ -205,3 +203,4 @@ const UploadChargingForm = () => {
 };
 
 export default UploadChargingForm;
+
