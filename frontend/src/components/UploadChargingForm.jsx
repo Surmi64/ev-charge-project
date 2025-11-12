@@ -246,12 +246,12 @@ const UploadChargingForm = () => {
             freeSolo
             options={noteOptions}
             value={notes}
-            minRows={4}
             onInputChange={(e, newValue) => setNotes(newValue)}
             renderInput={(params) => (
               <TextField
-                {...params}
-                label="Notes"
+              {...params}
+              label="Notes"
+                minRows={2}
                 placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
                 fullWidth
                 sx={{ mb: 2 }}
