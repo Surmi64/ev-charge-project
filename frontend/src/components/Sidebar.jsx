@@ -5,13 +5,12 @@ import {
   ListItemButton,
   ListItemText,
   ListItemIcon,
-  IconButton,
   Divider,
 } from '@mui/material';
 import { Menu, Upload, ListAlt, HelpOutline } from '@mui/icons-material';
 
 const Sidebar = ({ setCurrentPage }) => {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const toggleSidebar = () => setOpen(!open);
 
