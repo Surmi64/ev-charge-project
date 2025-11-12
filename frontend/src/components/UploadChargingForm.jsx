@@ -134,7 +134,7 @@ const UploadChargingForm = () => {
         alignItems="stretch"
         padding={2}
       >
-        <div>
+        <div spacing={2}>
           <TextField
             select
             label="Vehicle"
@@ -150,7 +150,7 @@ const UploadChargingForm = () => {
           </TextField>
         </div>
 
-        <div>
+        <div spacing={2}>
           <TextField
             type="datetime-local"
             label="Start Time"
