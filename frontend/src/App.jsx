@@ -11,7 +11,7 @@ function App() {
   return (
     <Box display="flex" height="100vh">
       <Sidebar setCurrentPage={setCurrentPage} />
-      <Box flexGrow={1} p={3}>
+      <Box flexGrow={1} p={3} overflow="auto">
         {currentPage === 'upload' && <UploadChargingForm />}
         {currentPage === 'list' && <ListChargingSessions />}
       </Box>
