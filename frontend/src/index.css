@@ -1,4 +1,3 @@
-
 body {
   margin: 0;
   font-family: 'Roboto', sans-serif;
@@ -7,4 +6,8 @@ body {
 
 #root {
   height: 100vh;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0;
+  text-align: left;
 }
