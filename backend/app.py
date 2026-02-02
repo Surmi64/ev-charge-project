@@ -27,7 +27,7 @@ def get_db_connection():
 @app.route('/charging_sessions', methods=['POST'])
 def add_charging_session():
     data = request.json
-    required_fields = ['vehicle_id', 'start_time_posix', 'kwh', 'duration_seconds', 'cost_huf', 'price_per_kwh', 'source', 'currency']
+    required_fields = ['vehicle_id', 'start_time', 'kwh', 'cost_huf', 'source']
 
     if not all(field in data for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
@@ -35,33 +35,35 @@ def add_charging_session():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        pk = f"{data['vehicle_id']}_{data['start_time_posix']}"
+        # Parsing ISO format directly
+        start_time = data['start_time']
+        end_time = data.get('end_time')
+        
         cur.execute(
             """
             INSERT INTO charging_sessions 
-            (id, vehicle_id, license_plate, start_time_posix, end_time_posix, kwh, duration_seconds,
+            (vehicle_id, license_plate, start_time, end_time, kwh, duration_seconds,
              cost_huf, price_per_kwh, source, currency,
-             invoice_id, notes, created_at, odometer, provider, ac_or_dc, kw)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
+             notes, odometer, provider, city, location_detail, ac_or_dc, kw, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id;
             """,
             (
-                pk,
                 data.get('vehicle_id'),
                 data.get('license_plate'),
-                data.get('start_time_posix'),
-                data.get('end_time_posix'),
+                start_time,
+                end_time,
                 data.get('kwh'),
                 data.get('duration_seconds'),
                 data.get('cost_huf'),
                 data.get('price_per_kwh'),
                 data.get('source'),
-                data.get('currency'),
-                data.get('invoice_id'),
+                data.get('currency', 'HUF'),
                 data.get('notes'),
                 data.get('odometer'),
                 data.get('provider'),
+                data.get('city'),
+                data.get('location_detail'),
                 data.get('ac_or_dc'),
                 data.get('kw'),
             )
@@ -82,13 +84,59 @@ def get_charging_sessions():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cur.execute("SELECT * FROM charging_sessions ORDER BY start_time_posix DESC")
+        # Returning ISO format directly, using DB native TIMESTAMPTZ
+        cur.execute("""
+            SELECT 
+                id, vehicle_id, license_plate, 
+                start_time, end_time,
+                kwh, duration_seconds, cost_huf, price_per_kwh, 
+                source, currency, notes, odometer, provider, city, location_detail, ac_or_dc, kw
+            FROM charging_sessions 
+            ORDER BY start_time DESC
+        """)
         rows = cur.fetchall()
+        # Ensure datetimes are serialized to ISO string
+        for row in rows:
+            if row['start_time']:
+                row['start_time'] = row['start_time'].isoformat()
+            if row['end_time']:
+                row['end_time'] = row['end_time'].isoformat()
     finally:
         cur.close()
         conn.close()
 
     return jsonify(rows), 200
+
+@app.route('/charging_sessions/locations', methods=['GET'])
+def get_locations():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("""
+            SELECT provider, city, location_detail 
+            FROM charging_sessions 
+            WHERE provider IS NOT NULL
+            GROUP BY provider, city, location_detail
+            ORDER BY provider, city, location_detail
+        """)
+        rows = cur.fetchall()
+        
+        mapping = {}
+        for row in rows:
+            p = row['provider']
+            c = row['city']
+            if p not in mapping:
+                mapping[p] = {}
+            if c and c not in mapping[p]:
+                mapping[p][c] = []
+            if row['location_detail'] and row['location_detail'] not in mapping[p].get(c, []):
+                mapping[p][c].append(row['location_detail'])
+                
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify(mapping), 200
 
 @app.route('/charging_sessions/notes', methods=['GET'])
 def get_charging_session_notes():
