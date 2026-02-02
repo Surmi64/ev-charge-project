@@ -1,0 +1,60 @@
+import React from 'react';
+import { Paper, BottomNavigation, BottomNavigationAction } from '@mui/material';
+import { AddCircle, History, Assessment } from '@mui/icons-material';
+
+const MobileNav = ({ currentPage, setCurrentPage }) => {
+  return (
+    <Paper sx={{ 
+      position: 'fixed', 
+      bottom: 16, 
+      left: 16, 
+      right: 16, 
+      zIndex: 1000,
+      borderRadius: '24px',
+      overflow: 'hidden',
+      border: '1px solid rgba(255,255,255,0.1)',
+      background: 'rgba(22, 27, 34, 0.8)',
+      backdropFilter: 'blur(20px)',
+    }} elevation={10}>
+      <BottomNavigation
+        showLabels
+        value={currentPage}
+        onChange={(event, newValue) => {
+          setCurrentPage(newValue);
+        }}
+        sx={{
+          background: 'transparent',
+          height: 64,
+          '& .MuiBottomNavigationAction-root': {
+            color: 'rgba(255, 255, 255, 0.5)',
+            transition: 'all 0.3s ease',
+          },
+          '& .Mui-selected': {
+            color: '#00e676 !important',
+            '& .MuiBottomNavigationAction-label': {
+              fontWeight: 700,
+              fontSize: '0.85rem',
+            },
+            '& svg': {
+              transform: 'scale(1.2)',
+            }
+          },
+        }}
+      >
+        <BottomNavigationAction value="upload" label="Record" icon={<AddCircle />} />
+        <BottomNavigationAction value="list" label="Logs" icon={<History />} />
+        <BottomNavigationAction 
+          value="stats" 
+          label="Analytics" 
+          icon={<Assessment />} 
+          onClick={(e) => {
+            e.preventDefault();
+            window.open('http://100.104.111.43:3000', '_blank');
+          }}
+        />
+      </BottomNavigation>
+    </Paper>
+  );
+};
+
+export default MobileNav;

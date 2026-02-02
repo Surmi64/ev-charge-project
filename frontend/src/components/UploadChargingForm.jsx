@@ -1,95 +1,79 @@
 import React, { useState, useEffect } from "react";
 import {
-  Box,
-  TextField,
-  MenuItem,
-  Button,
-  Grid,
-  InputAdornment,
+  Box, TextField, MenuItem, Button, Grid,
+  InputAdornment, Typography, Card, CardContent,
+  Stack, Autocomplete
 } from "@mui/material";
-import Autocomplete from "@mui/material/Autocomplete";
-
-const vehicles = [{ id: 1, label: "SSA511" }];
+import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
+import { Save, EvStation, LocalAtm, DirectionsCar } from "@mui/icons-material";
+import dayjs from "dayjs";
 
 const currencies = ["HUF", "EUR", "USD"];
+const providers = ["Mobiliti", "Tesla", "EON", "Lidl", "Penny", "Otthon", "Egyéb"];
 const API_URL = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
 
-const UploadChargingForm = () => {
-  const [vehicleId, setVehicleId] = useState(1);
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
+const UploadChargingForm = ({ onSuccess }) => {
+  const [startTime, setStartTime] = useState(dayjs());
+  const [endTime, setEndTime] = useState(dayjs().add(30, 'minute'));
   const [kwh, setKwh] = useState("");
-  const [duration, setDuration] = useState("");
   const [cost, setCost] = useState("");
-  const [pricePerKwh, setPricePerKwh] = useState("");
   const [currency, setCurrency] = useState("HUF");
+  const [provider, setProvider] = useState("");
+  const [city, setCity] = useState("");
+  const [locationDetail, setLocationDetail] = useState("");
+  const [acOrDc, setAcOrDc] = useState("AC");
+  const [kw, setKw] = useState("");
   const [notes, setNotes] = useState("");
   const [odometer, setOdometer] = useState("");
-  const [noteOptions, setNoteOptions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [locationMapping, setLocationMapping] = useState({});
 
   useEffect(() => {
-    const fetchNotes = async () => {
-      try {
-        const res = await fetch(`${API_URL}/charging_sessions/notes`);
-        if (!res.ok) throw new Error("Failed to fetch notes");
-        const data = await res.json();
-
-        // Expecting `data` as an array of note strings or objects like { notes: "..." }
-        const allNotes = data
-          .map((n) => (typeof n === "string" ? n : n.notes))
-          .filter(Boolean);
-        const uniqueNotes = [...new Set(allNotes)]; // remove duplicates
-        setNoteOptions(uniqueNotes);
-      } catch (err) {
-        console.error("Error fetching notes:", err);
-      }
-    };
-
-    fetchNotes();
+    fetch(`${API_URL}/charging_sessions/locations`)
+      .then(res => res.json())
+      .then(data => setLocationMapping(data))
+      .catch(err => console.error("Error fetching locations:", err));
   }, []);
 
-  useEffect(() => {
-    if (startTime && endTime) {
-      const durationSeconds = (new Date(endTime) - new Date(startTime)) / 1000;
-      setDuration(durationSeconds >= 0 ? durationSeconds : "");
-    }
-    if (kwh && cost) {
-      const price = parseFloat(cost) / parseFloat(kwh);
-      setPricePerKwh(!isNaN(price) ? price.toFixed(2) : "");
-    }
-  }, [startTime, endTime, kwh, cost]);
+  const availableCities = provider && locationMapping[provider] 
+    ? Object.keys(locationMapping[provider]) 
+    : [];
+    
+  const availableDetails = provider && city && locationMapping[provider]?.[city]
+    ? locationMapping[provider][city]
+    : [];
+
+  // Auto-calculate values
+  const pricePerKwh = (kwh && cost) ? (parseFloat(cost) / parseFloat(kwh)).toFixed(2) : "0";
+  const durationMinutes = (startTime && endTime) ? endTime.diff(startTime, 'minute') : 0;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
     const payload = {
-      vehicle_id: vehicleId,
-      start_time_posix: Math.floor(new Date(startTime).getTime() / 1000),
-      end_time_posix: endTime
-        ? Math.floor(new Date(endTime).getTime() / 1000)
-        : null,
+      vehicle_id: 1, // Fixed ID for SSA511
+      start_time: startTime.toISOString(),
+      end_time: endTime ? endTime.toISOString() : null,
       kwh: kwh ? parseFloat(kwh) : null,
-      duration_seconds: duration ? parseFloat(duration) : null,
+      duration_seconds: durationMinutes * 60,
       cost_huf: cost ? parseFloat(cost) : null,
-      price_per_kwh: pricePerKwh ? parseFloat(pricePerKwh) : null,
-      source: "frontend",
+      price_per_kwh: parseFloat(pricePerKwh),
+      source: "frontend_v4",
       currency,
-      invoice_id: null,
       notes,
-      provider: notes.split(" ")[0],
-      ac_or_dc: notes.toLocaleLowerCase().split(" ").includes("dc")
-        ? "DC"
-        : "AC",
-      kw: notes.split(" ")[notes.split(" ").length - 1],
-      license_plate: vehicles.find((v) => v.id === vehicleId)?.label || null,
-      odometer: odometer,
+      provider,
+      city,
+      location_detail: locationDetail,
+      ac_or_dc: acOrDc,
+      kw: kw,
+      license_plate: "SSA511",
+      odometer: odometer ? parseFloat(odometer) : null,
     };
 
     try {
       const response = await fetch(`${API_URL}/charging_sessions`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
@@ -97,174 +81,192 @@ const UploadChargingForm = () => {
         const errorData = await response.json();
         alert("Error: " + (errorData.error || "Unknown error"));
       } else {
-        alert("Charging session saved successfully!");
-        setStartTime("");
-        setEndTime("");
-        setKwh("");
-        setDuration("");
-        setCost("");
-        setPricePerKwh("");
-        setNotes("");
-        setOdometer("");
+        if (onSuccess) onSuccess();
       }
     } catch (err) {
-      console.error(err);
-      alert("Failed to save charging session. See console for details.");
+      console.error("Submit error:", err);
+      alert("Failed to save session");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <Box
-      component="form"
-      onSubmit={handleSubmit}
-      sx={{
-        maxWidth: 700,
-        margin: "0 auto",
-        p: { xs: 2, sm: 4 },
-        backgroundColor: "#fff",
-        borderRadius: 2,
-        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-      }}
-    >
-      <Grid
-        container
-        spacing={2}
-        direction="column"
-        justifyContent="center"
-        alignItems="stretch"
-        padding={2}
-      >
-        <div>
-          <TextField
-            select
-            label="Vehicle"
-            fullWidth
-            value={vehicleId}
-            onChange={(e) => setVehicleId(parseInt(e.target.value))}
-          >
-            {vehicles.map((v) => (
-              <MenuItem key={v.id} value={v.id}>
-                {v.label}
-              </MenuItem>
-            ))}
-          </TextField>
-        </div>
+    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 4 }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+        ⚡ EV CHARGE ENTRY ⚡
+      </Typography>
 
-        <div>
-          <TextField
-            type="datetime-local"
-            label="Start Time"
-            fullWidth
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-            sx={{ mb: 2 }}
-          />
-          <TextField
-            type="datetime-local"
-            label="End Time"
-            fullWidth
-            value={endTime}
-            onChange={(e) => setEndTime(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-            sx={{ mb: 2 }}
-          />
-        </div>
-
-        <div>
-          <TextField
-            label="kWh"
-            fullWidth
-            value={kwh}
-            onChange={(e) => setKwh(e.target.value)}
-            sx={{ mb: 2 }}
-          />
-
-          <TextField
-            label="Duration (s)"
-            fullWidth
-            value={duration}
-            onChange={(e) => setDuration(e.target.value)}
-            sx={{ mb: 2 }}
-          />
-        </div>
-        <div>
-          <TextField
-            label="Cost"
-            fullWidth
-            value={cost}
-            onChange={(e) => setCost(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">{currency}</InputAdornment>
-              ),
-            }}
-            sx={{ mb: 2 }}
-          />
-
-          <TextField
-            label="Price per kWh"
-            fullWidth
-            value={pricePerKwh}
-            onChange={(e) => setPricePerKwh(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">{currency}</InputAdornment>
-              ),
-            }}
-            sx={{ mb: 2 }}
-          />
-        </div>
-        <div>
-          <TextField
-            select
-            label="Currency"
-            fullWidth
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value)}
-            sx={{ mb: 2 }}
-          >
-            {currencies.map((c) => (
-              <MenuItem key={c} value={c}>
-                {c}
-              </MenuItem>
-            ))}
-          </TextField>
-
-          <TextField
-            label="Odometer (km)"
-            name="odometer"
-            type="number"
-            value={odometer}
-            onChange={(e) => setOdometer(e.target.value)}
-            fullWidth
-            sx={{ mb: 2 }}
-          />
-        </div>
-        <div>
-          <Autocomplete
-            freeSolo
-            options={noteOptions}
-            value={notes}
-            onInputChange={(e, newValue) => setNotes(newValue)}
-            renderInput={(params) => (
-              <TextField
-              {...params}
-              label="Notes"
-                minRows={2}
-                placeholder="Keep this format: TEA Nyíregyháza Ledtechnika DC 60"
-                fullWidth
-                sx={{ mb: 2 }}
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
+        <CardContent>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 6 }}>
+              <DateTimePicker
+                label="Start"
+                value={startTime}
+                onChange={(newValue) => setStartTime(newValue)}
+                slotProps={{ textField: { fullWidth: true, size: "small" } }}
               />
-            )}
-          />
-        </div>
-        <div>
-          <Button type="submit" variant="contained" color="primary" fullWidth>
-            Save
-          </Button>
-        </div>
-      </Grid>
+            </Grid>
+            <Grid size={{ xs: 6 }}>
+              <DateTimePicker
+                label="Stop"
+                value={endTime}
+                onChange={(newValue) => setEndTime(newValue)}
+                slotProps={{ textField: { fullWidth: true, size: "small" } }}
+              />
+            </Grid>
+
+            {/* Full-width vertical layout for Provider, City, Charger */}
+            <Grid size={{ xs: 12 }}>
+              <Autocomplete
+                freeSolo
+                options={providers}
+                value={provider}
+                onInputChange={(e, val) => {
+                  setProvider(val);
+                  setCity("");
+                  setLocationDetail("");
+                }}
+                renderInput={(params) => <TextField {...params} label="Provider" fullWidth size="small" />}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <Autocomplete
+                freeSolo
+                options={availableCities}
+                value={city}
+                onInputChange={(e, val) => {
+                  setCity(val);
+                  setLocationDetail("");
+                }}
+                renderInput={(params) => <TextField {...params} label="City" fullWidth size="small" />}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <Autocomplete
+                freeSolo
+                options={availableDetails}
+                value={locationDetail}
+                onInputChange={(e, val) => setLocationDetail(val)}
+                renderInput={(params) => <TextField {...params} label="Charger" fullWidth size="small" />}
+              />
+            </Grid>
+
+            {/* Plug and Power side by side (6-6) */}
+            <Grid size={{ xs: 6 }}>
+              <TextField
+                select
+                fullWidth
+                label="Plug"
+                value={acOrDc}
+                size="small"
+                onChange={(e) => setAcOrDc(e.target.value)}
+              >
+                <MenuItem value="AC">AC</MenuItem>
+                <MenuItem value="DC">DC</MenuItem>
+              </TextField>
+            </Grid>
+
+            <Grid size={{ xs: 6 }}>
+              <TextField
+                fullWidth
+                label="Power"
+                type="number"
+                value={kw}
+                size="small"
+                onChange={(e) => setKw(e.target.value)}
+                InputProps={{
+                  endAdornment: <InputAdornment position="end">kW</InputAdornment>,
+                }}
+              />
+            </Grid>
+          </Grid>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
+        <CardContent>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Total Energy"
+                type="number"
+                value={kwh}
+                onChange={(e) => setKwh(e.target.value)}
+                InputProps={{
+                  endAdornment: <InputAdornment position="end">kWh</InputAdornment>,
+                }}
+              />
+            </Grid>
+            <Grid size={{ xs: 8 }}>
+              <TextField
+                fullWidth
+                label="Cost"
+                type="number"
+                value={cost}
+                onChange={(e) => setCost(e.target.value)}
+                InputProps={{
+                  startAdornment: <InputAdornment position="start"><LocalAtm /></InputAdornment>,
+                }}
+              />
+            </Grid>
+            <Grid size={{ xs: 4 }}>
+              <TextField
+                select
+                fullWidth
+                label="CCY"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+              >
+                {currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              </TextField>
+            </Grid>
+            
+            <Grid size={{ xs: 12 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+                Unit price: <strong>{pricePerKwh}</strong> {currency}/kWh
+              </Typography>
+            </Grid>
+          </Grid>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
+        <CardContent>
+          <Stack spacing={2}>
+            <TextField
+              fullWidth
+              label="Odometer"
+              type="number"
+              value={odometer}
+              onChange={(e) => setOdometer(e.target.value)}
+              InputProps={{
+                endAdornment: <InputAdornment position="end">km</InputAdornment>,
+              }}
+            />
+          </Stack>
+        </CardContent>
+      </Card>
+
+      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+        <Button
+          type="submit"
+          variant="contained"
+          size="large"
+          disabled={loading || !kwh || !cost}
+          startIcon={<Save />}
+          sx={{ 
+            width: '50%', 
+            borderRadius: 3, 
+            py: 1.5, 
+            fontWeight: 'bold' 
+          }}
+        >
+          {loading ? "Saving..." : "Save Session"}
+        </Button>
+      </Box>
     </Box>
   );
 };

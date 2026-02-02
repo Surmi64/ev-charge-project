@@ -1,24 +1,76 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Box, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Paper, CircularProgress,
-  IconButton, TextField
+  Box, Card, CardContent, Typography, Grid, 
+  CircularProgress, IconButton, Chip, Divider, Stack
 } from '@mui/material';
-import { Edit, Save, Close } from '@mui/icons-material';
+import { Edit, EvStation, AccessTime, LocalAtm, DirectionsCar } from '@mui/icons-material';
+import dayjs from 'dayjs';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://100.104.111.43:5555';
 
-const formatPosix = (posix) => {
-  if (!posix) return '-';
-  const date = new Date(posix * 1000);
-  return date.toISOString().replace('T', ' ').slice(0, 19);
+const SessionCard = ({ session, onEdit }) => {
+  const startTime = session.start_time ? dayjs(session.start_time) : null;
+  const endTime = session.end_time ? dayjs(session.end_time) : null;
+  const isDC = session.ac_or_dc?.toUpperCase() === 'DC';
+
+  return (
+    <Card sx={{ mb: 2, borderRadius: 2, boxShadow: 2 }}>
+      <CardContent sx={{ p: 2 }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1}>
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary">
+              {startTime ? startTime.format('YYYY.MM.DD HH:mm') : '?'} 
+              {endTime ? ` → ${endTime.format('HH:mm')}` : ''}
+            </Typography>
+            <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', color: '#00e676' }}>
+              {session.kwh || 0} <small style={{ fontSize: '0.6em', opacity: 0.8 }}>kWh</small>
+            </Typography>
+          </Box>
+          <Stack alignItems="flex-end">
+            <Stack direction="row" spacing={1} mb={1}>
+              <Typography variant="caption" sx={{ alignSelf: 'center', opacity: 0.7 }}>
+                {session.kw ? `${session.kw}kW` : ''}
+              </Typography>
+              <Chip 
+                label={session.ac_or_dc || 'AC'} 
+                color={isDC ? "error" : "success"} 
+                size="small" 
+                variant="filled"
+                sx={{ fontWeight: 'bold', height: 20, fontSize: '0.65rem' }}
+              />
+            </Stack>
+            <Typography variant="h6" color="secondary.main" sx={{ fontWeight: 'bold' }}>
+              {Math.round(session.cost_huf || 0).toLocaleString()} <small style={{ fontSize: '0.6em' }}>{session.currency || 'HUF'}</small>
+            </Typography>
+          </Stack>
+        </Stack>
+
+        <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.05)' }} />
+
+        <Grid container spacing={1} mt={0.5}>
+          <Grid size={{ xs: 12 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {session.provider || 'Unknown'} • {session.city || ''}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {[session.location_detail, session.notes].filter(Boolean).join(' • ')}
+            </Typography>
+          </Grid>
+        </Grid>
+
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+          <IconButton size="small" onClick={() => onEdit(session)}>
+            <Edit fontSize="small" />
+          </IconButton>
+        </Box>
+      </CardContent>
+    </Card>
+  );
 };
 
 const ListChargingSessions = () => {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editRowId, setEditRowId] = useState(null);
-  const [editValues, setEditValues] = useState({});
 
   useEffect(() => {
     fetch(`${API_URL}/charging_sessions`)
@@ -33,99 +85,26 @@ const ListChargingSessions = () => {
       });
   }, []);
 
-  const handleEditClick = (session) => {
-    setEditRowId(session.id);
-    setEditValues(session);
-  };
-
-  const handleChange = (field, value) => {
-    setEditValues({ ...editValues, [field]: value });
-  };
-
-  const handleSave = async () => {
-    try {
-      const res = await fetch(`${API_URL}/charging_sessions/${editRowId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editValues),
-      });
-      if (!res.ok) throw new Error("Update failed");
-      const updated = sessions.map(s =>
-        s.id === editRowId ? { ...s, ...editValues } : s
-      );
-      setSessions(updated);
-      setEditRowId(null);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to update record");
-    }
-  };
-
-  if (loading) return <CircularProgress />;
-
-  const columns = [
-    { key: "id", label: "ID", editable: false },
-    { key: "license_plate", label: "Vehicle" },
-    { key: "start_time_posix", label: "Start Time" },
-    { key: "end_time_posix", label: "End Time" },
-    { key: "kwh", label: "kWh" },
-    { key: "cost_huf", label: "Cost" },
-    { key: "price_per_kwh", label: "Price/kWh" },
-    { key: "notes", label: "Notes" },
-    { key: "ac_or_dc", label: "AC or DC" },
-    { key: "provider", label: "Provider" },
-    { key: "kw", label: "kW" },
-    { key: "odometer", label: "Odometer" },
-    { key: "currency", label: "Currency" },
-  ];
+  if (loading) return (
+    <Box display="flex" justifyContent="center" p={5}>
+      <CircularProgress />
+    </Box>
+  );
 
   return (
-    <Box sx={{ width: "100%", maxWidth: "1400px", mx: "auto", mt: 2 }}>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              {columns.map(col => (
-                <TableCell key={col.key}>{col.label}</TableCell>
-              ))}
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {sessions.map((s) => (
-              <TableRow key={s.id}>
-                {columns.map((col) => (
-                  <TableCell key={col.key} sx={{ padding: "6px 8px" }}>
-                    {editRowId === s.id && col.editable !== false ? (
-                      <TextField
-                        value={editValues[col.key] ?? ""}
-                        onChange={e => handleChange(col.key, e.target.value)}
-                        size="small"
-                        fullWidth
-                        variant="outlined"
-                      />
-                    ) : (
-                      col.key.includes("time_posix")
-                        ? formatPosix(s[col.key])
-                        : s[col.key]
-                    )}
-                  </TableCell>
-                ))}
-                <TableCell>
-                  {editRowId === s.id ? (
-                    <>
-                      <IconButton onClick={handleSave}><Save /></IconButton>
-                      <IconButton onClick={() => setEditRowId(null)}><Close /></IconButton>
-                    </>
-                  ) : (
-                    <IconButton onClick={() => handleEditClick(s)}><Edit /></IconButton>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+    <Box sx={{ pb: 2 }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1 }}>
+        History
+      </Typography>
+      {sessions.length === 0 ? (
+        <Typography variant="body1" sx={{ textAlign: 'center', mt: 4, color: 'text.secondary' }}>
+          No charging sessions yet.
+        </Typography>
+      ) : (
+        sessions.map((s) => (
+          <SessionCard key={s.id} session={s} onEdit={(s) => alert('Edit is coming next...')} />
+        ))
+      )}
     </Box>
   );
 };
