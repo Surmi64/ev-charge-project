@@ -1,0 +1,17 @@
+{
+  "short_name": "EV Charge",
+  "name": "EV Charge Entry",
+  "icons": [
+    {
+      "src": "bolt.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "./",
+  "display": "standalone",
+  "theme_color": "#050508",
+  "background_color": "#050508",
+  "orientation": "portrait"
+}
