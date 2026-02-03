@@ -15,7 +15,17 @@ const API_URL = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
 const UploadChargingForm = ({ onSuccess }) => {
   const [startTime, setStartTime] = useState(dayjs());
   const [endTime, setEndTime] = useState(dayjs().add(30, 'minute'));
-  // ... (rest of state)
+  const [kwh, setKwh] = useState("");
+  const [cost, setCost] = useState("");
+  const [currency, setCurrency] = useState("HUF");
+  const [provider, setProvider] = useState("");
+  const [city, setCity] = useState("");
+  const [locationDetail, setLocationDetail] = useState("");
+  const [acOrDc, setAcOrDc] = useState("AC");
+  const [kw, setKw] = useState("");
+  const [odometer, setOdometer] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [locationMapping, setLocationMapping] = useState({});
 
   useEffect(() => {
     fetch(`${API_URL}/charging_sessions/locations`)
@@ -55,7 +65,6 @@ const UploadChargingForm = ({ onSuccess }) => {
       price_per_kwh: parseFloat(pricePerKwh),
       source: "frontend_v4",
       currency,
-      notes,
       provider,
       city,
       location_detail: locationDetail,
@@ -228,18 +237,6 @@ const UploadChargingForm = ({ onSuccess }) => {
                 InputProps={{
                   endAdornment: <InputAdornment position="end">km</InputAdornment>,
                 }}
-              />
-            </Grid>
-
-            <Grid size={{ xs: 12 }}>
-              <TextField
-                fullWidth
-                label="Notes"
-                size="small"
-                multiline
-                rows={1}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
               />
             </Grid>
             
