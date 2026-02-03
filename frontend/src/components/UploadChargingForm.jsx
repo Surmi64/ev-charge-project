@@ -31,7 +31,13 @@ const UploadChargingForm = ({ onSuccess }) => {
   useEffect(() => {
     fetch(`${API_URL}/charging_sessions/locations`)
       .then(res => res.json())
-      .then(data => setLocationMapping(data))
+      .then(data => {
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          setLocationMapping(data);
+        } else {
+          console.error("Expected locations object but got:", data);
+        }
+      })
       .catch(err => console.error("Error fetching locations:", err));
   }, []);
 

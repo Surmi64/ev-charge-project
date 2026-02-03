@@ -127,10 +127,11 @@ def get_locations():
             c = row['city']
             if p not in mapping:
                 mapping[p] = {}
-            if c and c not in mapping[p]:
-                mapping[p][c] = []
-            if row['location_detail'] and row['location_detail'] not in mapping[p].get(c, []):
-                mapping[p][c].append(row['location_detail'])
+            if c:
+                if c not in mapping[p]:
+                    mapping[p][c] = []
+                if row['location_detail'] and row['location_detail'] not in mapping[p][c]:
+                    mapping[p][c].append(row['location_detail'])
                 
     finally:
         cur.close()
@@ -161,10 +162,10 @@ def get_charging_session_notes():
 def update_charging_session(session_id):
     data = request.json
     allowed_fields = [
-        "license_plate", "start_time_posix", "end_time_posix", "kwh",
+        "license_plate", "start_time", "end_time", "kwh",
         "duration_seconds", "cost_huf", "price_per_kwh", "source",
         "currency", "invoice_id", "notes", "odometer", "provider",
-        "ac_or_dc", "kw"
+        "city", "location_detail", "ac_or_dc", "kw"
     ]
 
     updates = {k: v for k, v in data.items() if k in allowed_fields}
