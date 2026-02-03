@@ -97,14 +97,14 @@ const UploadChargingForm = ({ onSuccess }) => {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ pb: 1 }}>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+      <Typography variant="h5" sx={{ mb: 1, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 4 }}>
-        <CardContent sx={{ p: 3, '&:last-child': { pb: 3 } }}>
-          <Grid container spacing={3}>
-            <Grid size={{ xs: 12 }}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
+        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+          <Grid container spacing={2.5}>
+            <Grid item xs={12} sx={{ width: '100%' }}>
               <DateTimePicker
                 label="Start"
                 value={startTime}
@@ -112,7 +112,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 slotProps={{ textField: { fullWidth: true, size: "small" } }}
               />
             </Grid>
-            <Grid size={{ xs: 12 }}>
+            <Grid item xs={12} sx={{ width: '100%' }}>
               <DateTimePicker
                 label="Stop"
                 value={endTime}
@@ -259,7 +259,7 @@ const UploadChargingForm = ({ onSuccess }) => {
           sx={{ 
             width: '50%', 
             borderRadius: 3, 
-            py: 1.5, 
+            py: 1, 
             fontWeight: 'bold' 
           }}
         >
