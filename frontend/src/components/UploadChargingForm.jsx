@@ -9,30 +9,38 @@ import { Save, EvStation, LocalAtm, DirectionsCar } from "@mui/icons-material";
 import dayjs from "dayjs";
 
 const currencies = ["HUF", "EUR", "USD"];
-const providers = ["Mobiliti", "Tesla", "EON", "Lidl", "Penny", "Otthon", "Egyéb"];
-const API_URL = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
+
+// Smart API URL handling with fallback
+const PRIMARY_API = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
+const FALLBACK_API = "http://192.168.1.100:5555"; // Your local fallback IP
+
+const getBackendUrl = async () => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
+    await fetch(`${PRIMARY_API}/health`, { method: 'HEAD', signal: controller.signal });
+    return PRIMARY_API;
+  } catch (e) {
+    console.warn("Primary API unreachable, using fallback.");
+    return FALLBACK_API;
+  }
+};
 
 const UploadChargingForm = ({ onSuccess }) => {
   const [startTime, setStartTime] = useState(dayjs());
-  const [endTime, setEndTime] = useState(dayjs().add(30, 'minute'));
-  const [kwh, setKwh] = useState("");
-  const [cost, setCost] = useState("");
-  const [currency, setCurrency] = useState("HUF");
-  const [provider, setProvider] = useState("");
-  const [city, setCity] = useState("");
-  const [locationDetail, setLocationDetail] = useState("");
-  const [acOrDc, setAcOrDc] = useState("AC");
-  const [kw, setKw] = useState("");
-  const [notes, setNotes] = useState("");
-  const [odometer, setOdometer] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [locationMapping, setLocationMapping] = useState({});
+  const [activeApi, setActiveApi] = useState(PRIMARY_API);
 
   useEffect(() => {
-    fetch(`${API_URL}/charging_sessions/locations`)
-      .then(res => res.json())
-      .then(data => setLocationMapping(data))
-      .catch(err => console.error("Error fetching locations:", err));
+    const resolveApi = async () => {
+      const url = await getBackendUrl();
+      setActiveApi(url);
+      
+      fetch(`${url}/charging_sessions/locations`)
+        .then(res => res.json())
+        .then(data => setLocationMapping(data))
+        .catch(err => console.error("Error fetching locations:", err));
+    };
+    resolveApi();
   }, []);
 
   const availableCities = provider && locationMapping[provider] 
@@ -71,7 +79,7 @@ const UploadChargingForm = ({ onSuccess }) => {
     };
 
     try {
-      const response = await fetch(`${API_URL}/charging_sessions`, {
+      const response = await fetch(`${activeApi}/charging_sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -121,7 +129,7 @@ const UploadChargingForm = ({ onSuccess }) => {
             <Grid size={{ xs: 12 }}>
               <Autocomplete
                 freeSolo
-                options={providers}
+                options={Object.keys(locationMapping)}
                 value={provider}
                 onInputChange={(e, val) => {
                   setProvider(val);
