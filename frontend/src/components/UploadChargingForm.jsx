@@ -91,14 +91,14 @@ const UploadChargingForm = ({ onSuccess }) => {
   };
 
   return (
-    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 4 }}>
-      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 1 }}>
+      <Typography variant="h5" sx={{ mb: 1, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
-        <CardContent>
-          <Grid container spacing={2}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
+        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Grid container spacing={1.5}>
             <Grid size={{ xs: 6 }}>
               <DateTimePicker
                 label="Start"
@@ -184,9 +184,9 @@ const UploadChargingForm = ({ onSuccess }) => {
         </CardContent>
       </Card>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
-        <CardContent>
-          <Grid container spacing={2}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
+        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Grid container spacing={1.5}>
             <Grid size={{ xs: 12 }}>
               <TextField
                 fullWidth
@@ -232,9 +232,9 @@ const UploadChargingForm = ({ onSuccess }) => {
         </CardContent>
       </Card>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 3 }}>
-        <CardContent>
-          <Stack spacing={2}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
+        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Stack spacing={1.5}>
             <TextField
               fullWidth
               label="Odometer"
@@ -249,7 +249,7 @@ const UploadChargingForm = ({ onSuccess }) => {
         </CardContent>
       </Card>
 
-      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
         <Button
           type="submit"
           variant="contained"

@@ -143,7 +143,7 @@ function App() {
             zIndex: 0,
           }
         }}>
-          <Container maxWidth="sm" sx={{ pt: 4, px: 2, position: 'relative', zIndex: 1 }}>
+          <Container maxWidth="sm" sx={{ pt: 1, px: 2, position: 'relative', zIndex: 1 }}>
             {currentPage === 'upload' && <UploadChargingForm onSuccess={() => setCurrentPage('list')} />}
             {currentPage === 'list' && <ListChargingSessions />}
           </Container>
