@@ -101,7 +101,7 @@ const UploadChargingForm = ({ onSuccess }) => {
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 4 }}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 2 }}>
         <CardContent sx={{ p: 3, '&:last-child': { pb: 3 } }}>
           <Grid container spacing={3}>
             <Grid size={12}>
@@ -241,7 +241,7 @@ const UploadChargingForm = ({ onSuccess }) => {
             </Grid>
             
             <Grid size={12}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: -0.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: -1 }}>
                 Price: <strong>{pricePerKwh}</strong> {currency}/kWh
               </Typography>
             </Grid>
