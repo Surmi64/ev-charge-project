@@ -96,15 +96,15 @@ const UploadChargingForm = ({ onSuccess }) => {
   };
 
   return (
-    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 2 }}>
-      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 1 }}>
+      <Typography variant="h5" sx={{ mb: 1.5, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 2 }}>
-        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-          <Grid container spacing={2}>
-            <Grid item xs={12}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 4 }}>
+        <CardContent sx={{ p: 3, '&:last-child': { pb: 3 } }}>
+          <Grid container spacing={3}>
+            <Grid size={12}>
               <DateTimePicker
                 label="Start"
                 value={startTime}
@@ -112,7 +112,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 slotProps={{ textField: { fullWidth: true, size: "small" } }}
               />
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <DateTimePicker
                 label="Stop"
                 value={endTime}
@@ -121,7 +121,8 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            {/* Full-width vertical layout for Provider, City, Charger */}
+            <Grid size={12}>
               <Autocomplete
                 freeSolo
                 options={Object.keys(locationMapping)}
@@ -134,7 +135,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 renderInput={(params) => <TextField {...params} label="Provider" fullWidth size="small" />}
               />
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Autocomplete
                 freeSolo
                 options={availableCities}
@@ -146,7 +147,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 renderInput={(params) => <TextField {...params} label="City" fullWidth size="small" />}
               />
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Autocomplete
                 freeSolo
                 options={availableDetails}
@@ -156,7 +157,8 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
 
-            <Grid item xs={6}>
+            {/* Plug and Power side by side (6-6) */}
+            <Grid size={6}>
               <TextField
                 select
                 fullWidth
@@ -169,7 +171,8 @@ const UploadChargingForm = ({ onSuccess }) => {
                 <MenuItem value="DC">DC</MenuItem>
               </TextField>
             </Grid>
-            <Grid item xs={6}>
+
+            <Grid size={6}>
               <TextField
                 fullWidth
                 label="Power"
@@ -183,7 +186,8 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            {/* Energy Info */}
+            <Grid size={12}>
               <TextField
                 fullWidth
                 label="Total Energy"
@@ -196,8 +200,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 }}
               />
             </Grid>
-            
-            <Grid item xs={8}>
+            <Grid size={8}>
               <TextField
                 fullWidth
                 label="Cost"
@@ -210,7 +213,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 }}
               />
             </Grid>
-            <Grid item xs={4}>
+            <Grid size={4}>
               <TextField
                 select
                 fullWidth
@@ -223,7 +226,7 @@ const UploadChargingForm = ({ onSuccess }) => {
               </TextField>
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <TextField
                 fullWidth
                 label="Odometer"
@@ -237,8 +240,8 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
             
-            <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
+            <Grid size={12}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: -0.5 }}>
                 Price: <strong>{pricePerKwh}</strong> {currency}/kWh
               </Typography>
             </Grid>
@@ -257,7 +260,7 @@ const UploadChargingForm = ({ onSuccess }) => {
             width: '100%', 
             maxWidth: '300px',
             borderRadius: 3, 
-            py: 1.2, 
+            py: 1.5, 
             fontWeight: 'bold' 
           }}
         >

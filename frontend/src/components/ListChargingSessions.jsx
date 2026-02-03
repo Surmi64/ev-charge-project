@@ -98,7 +98,7 @@ const ListChargingSessions = () => {
 
   return (
     <Box sx={{ pb: 2 }}>
-      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1 }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, textAlign: 'center' }}>
         History
       </Typography>
       {!Array.isArray(sessions) || sessions.length === 0 ? (
