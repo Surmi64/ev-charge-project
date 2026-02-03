@@ -117,7 +117,7 @@ function App() {
       <LocalizationProvider dateAdapter={AdapterDayjs}>
         <CssBaseline />
         <Box sx={{ 
-          pb: 10, 
+          pb: { xs: 15, sm: 10 }, 
           minHeight: '100vh', 
           background: 'radial-gradient(circle at 0% 0%, #050508 0%, #0a0a1f 50%, #050508 100%)',
           position: 'relative',
