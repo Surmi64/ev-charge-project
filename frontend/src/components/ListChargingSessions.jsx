@@ -76,7 +76,12 @@ const ListChargingSessions = () => {
     fetch(`${API_URL}/charging_sessions`)
       .then(res => res.json())
       .then(data => {
-        setSessions(data);
+        if (Array.isArray(data)) {
+          setSessions(data);
+        } else {
+          console.error("Expected array but got:", data);
+          setSessions([]);
+        }
         setLoading(false);
       })
       .catch(err => {
@@ -96,13 +101,13 @@ const ListChargingSessions = () => {
       <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1 }}>
         History
       </Typography>
-      {sessions.length === 0 ? (
+      {!Array.isArray(sessions) || sessions.length === 0 ? (
         <Typography variant="body1" sx={{ textAlign: 'center', mt: 4, color: 'text.secondary' }}>
           No charging sessions yet.
         </Typography>
       ) : (
         sessions.map((s) => (
-          <SessionCard key={s.id} session={s} onEdit={(s) => alert('Edit is coming next...')} />
+          <SessionCard key={s.id} session={s} onEdit={() => alert('Edit is coming next...')} />
         ))
       )}
     </Box>
