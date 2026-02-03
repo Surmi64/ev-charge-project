@@ -24,6 +24,7 @@ const UploadChargingForm = ({ onSuccess }) => {
   const [acOrDc, setAcOrDc] = useState("AC");
   const [kw, setKw] = useState("");
   const [odometer, setOdometer] = useState("");
+  const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
   const [locationMapping, setLocationMapping] = useState({});
 
@@ -180,18 +181,14 @@ const UploadChargingForm = ({ onSuccess }) => {
                 }}
               />
             </Grid>
-          </Grid>
-        </CardContent>
-      </Card>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
-        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-          <Grid container spacing={1.5}>
+            {/* Separator / Energy Info */}
             <Grid size={{ xs: 12 }}>
               <TextField
                 fullWidth
                 label="Total Energy"
                 type="number"
+                size="small"
                 value={kwh}
                 onChange={(e) => setKwh(e.target.value)}
                 InputProps={{
@@ -204,10 +201,11 @@ const UploadChargingForm = ({ onSuccess }) => {
                 fullWidth
                 label="Cost"
                 type="number"
+                size="small"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
                 InputProps={{
-                  startAdornment: <InputAdornment position="start"><LocalAtm /></InputAdornment>,
+                  startAdornment: <InputAdornment position="start"><LocalAtm sx={{ fontSize: 20 }} /></InputAdornment>,
                 }}
               />
             </Grid>
@@ -216,36 +214,46 @@ const UploadChargingForm = ({ onSuccess }) => {
                 select
                 fullWidth
                 label="CCY"
+                size="small"
                 value={currency}
                 onChange={(e) => setCurrency(e.target.value)}
               >
                 {currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
               </TextField>
             </Grid>
+
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Odometer"
+                type="number"
+                size="small"
+                value={odometer}
+                onChange={(e) => setOdometer(e.target.value)}
+                InputProps={{
+                  endAdornment: <InputAdornment position="end">km</InputAdornment>,
+                }}
+              />
+            </Grid>
+
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Notes"
+                size="small"
+                multiline
+                rows={1}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </Grid>
             
             <Grid size={{ xs: 12 }}>
-              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-                Unit price: <strong>{pricePerKwh}</strong> {currency}/kWh
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: -0.5 }}>
+                Price: <strong>{pricePerKwh}</strong> {currency}/kWh
               </Typography>
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
-
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
-        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-          <Stack spacing={1.5}>
-            <TextField
-              fullWidth
-              label="Odometer"
-              type="number"
-              value={odometer}
-              onChange={(e) => setOdometer(e.target.value)}
-              InputProps={{
-                endAdornment: <InputAdornment position="end">km</InputAdornment>,
-              }}
-            />
-          </Stack>
         </CardContent>
       </Card>
 
