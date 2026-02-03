@@ -102,9 +102,9 @@ const UploadChargingForm = ({ onSuccess }) => {
       sx={{ 
         display: 'flex', 
         flexDirection: 'column', 
-        minHeight: { xs: 'calc(100vh - 120px)', sm: 'auto' }, 
+        minHeight: { xs: 'calc(100dvh - 200px)', sm: 'auto' }, 
         justifyContent: 'space-between',
-        pb: 2
+        pb: { xs: 8, sm: 2 } // Plusz hely a gomb alatt mobilon a biztonság kedvéért
       }}
     >
       <Typography variant="h5" sx={{ mb: { xs: 1, sm: 3 }, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
