@@ -24,7 +24,6 @@ const UploadChargingForm = ({ onSuccess }) => {
   const [acOrDc, setAcOrDc] = useState("AC");
   const [kw, setKw] = useState("");
   const [odometer, setOdometer] = useState("");
-  const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
   const [locationMapping, setLocationMapping] = useState({});
 
@@ -66,7 +65,6 @@ const UploadChargingForm = ({ onSuccess }) => {
       price_per_kwh: parseFloat(pricePerKwh),
       source: "frontend_v4",
       currency,
-      notes,
       provider,
       city,
       location_detail: locationDetail,
@@ -99,13 +97,13 @@ const UploadChargingForm = ({ onSuccess }) => {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ pb: 1 }}>
-      <Typography variant="h5" sx={{ mb: 1, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
-        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-          <Grid container spacing={1.5}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 2.5 }}>
+        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+          <Grid container spacing={2}>
             <Grid size={{ xs: 6 }}>
               <DateTimePicker
                 label="Start"
@@ -239,18 +237,6 @@ const UploadChargingForm = ({ onSuccess }) => {
                 InputProps={{
                   endAdornment: <InputAdornment position="end">km</InputAdornment>,
                 }}
-              />
-            </Grid>
-
-            <Grid size={{ xs: 12 }}>
-              <TextField
-                fullWidth
-                label="Notes"
-                size="small"
-                multiline
-                rows={1}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
               />
             </Grid>
             
