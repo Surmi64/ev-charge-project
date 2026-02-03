@@ -7,7 +7,7 @@ import { Edit, EvStation, AccessTime, LocalAtm, DirectionsCar } from '@mui/icons
 import dayjs from 'dayjs';
 
 const PRIMARY_API = import.meta.env.VITE_API_URL || 'http://100.104.111.43:5555';
-const FALLBACK_API = 'http://192.168.1.100:5555';
+const FALLBACK_API = 'http://192.168.0.111:5555';
 
 const SessionCard = ({ session, onEdit }) => {
   const startTime = session.start_time ? dayjs(session.start_time) : null;
