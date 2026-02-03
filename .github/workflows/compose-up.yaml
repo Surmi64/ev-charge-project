@@ -18,14 +18,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clean up old containers
+      - name: Build and Update services
         run: |
-          docker compose -f ./docker-compose-example.yaml down
+          docker compose -f ./docker-compose-example.yaml up -d --build --remove-orphans
 
-      - name: Build all services (no cache) and start stack detached
+      - name: Cleanup old images
         run: |
-          docker compose -f ./docker-compose-example.yaml up -d --build
-
-      - name: Check running containers
-        run: |
-          docker ps -a
+          # Removes dangling images left over from the build process
+          docker image prune -f

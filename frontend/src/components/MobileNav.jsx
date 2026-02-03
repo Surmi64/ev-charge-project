@@ -2,7 +2,25 @@ import React from 'react';
 import { Paper, BottomNavigation, BottomNavigationAction } from '@mui/material';
 import { AddCircle, History, Assessment } from '@mui/icons-material';
 
+const PRIMARY_GRAFANA = 'http://100.104.111.43:3000';
+const FALLBACK_GRAFANA = 'http://192.168.0.111:3000';
+
 const MobileNav = ({ currentPage, setCurrentPage }) => {
+  const handleAnalyticsClick = async (e) => {
+    e.preventDefault();
+    let url = PRIMARY_GRAFANA;
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 1500);
+      // We check the backend health as a proxy for network connectivity
+      await fetch('http://100.104.111.43:5555/health', { method: 'HEAD', signal: controller.signal });
+      clearTimeout(tid);
+    } catch (e) {
+      url = FALLBACK_GRAFANA;
+    }
+    window.open(url, '_blank');
+  };
+
   return (
     <Paper sx={{ 
       position: 'fixed', 
@@ -47,10 +65,7 @@ const MobileNav = ({ currentPage, setCurrentPage }) => {
           value="stats" 
           label="Analytics" 
           icon={<Assessment />} 
-          onClick={(e) => {
-            e.preventDefault();
-            window.open('http://100.104.111.43:3000', '_blank');
-          }}
+          onClick={handleAnalyticsClick}
         />
       </BottomNavigation>
     </Paper>
