@@ -6,8 +6,7 @@ import {
 import { Edit, EvStation, AccessTime, LocalAtm, DirectionsCar } from '@mui/icons-material';
 import dayjs from 'dayjs';
 
-const PRIMARY_API = import.meta.env.VITE_API_URL || 'http://100.104.111.43:5555';
-const FALLBACK_API = 'http://192.168.0.111:5555';
+const API_URL = import.meta.env.VITE_API_URL || 'http://100.104.111.43:5555';
 
 const SessionCard = ({ session, onEdit }) => {
   const startTime = session.start_time ? dayjs(session.start_time) : null;
@@ -72,33 +71,18 @@ const SessionCard = ({ session, onEdit }) => {
 const ListChargingSessions = () => {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeApi, setActiveApi] = useState(PRIMARY_API);
 
   useEffect(() => {
-    const resolveAndFetch = async () => {
-      let url = PRIMARY_API;
-      try {
-        const controller = new AbortController();
-        setTimeout(() => controller.abort(), 2000);
-        await fetch(`${PRIMARY_API}/health`, { method: 'HEAD', signal: controller.signal });
-      } catch (e) {
-        console.warn("Primary API unreachable, using fallback.");
-        url = FALLBACK_API;
-      }
-      
-      setActiveApi(url);
-      fetch(`${url}/charging_sessions`)
-        .then(res => res.json())
-        .then(data => {
-          setSessions(data);
-          setLoading(false);
-        })
-        .catch(err => {
-          console.error(err);
-          setLoading(false);
-        });
-    };
-    resolveAndFetch();
+    fetch(`${API_URL}/charging_sessions`)
+      .then(res => res.json())
+      .then(data => {
+        setSessions(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error(err);
+        setLoading(false);
+      });
   }, []);
 
   if (loading) return (
