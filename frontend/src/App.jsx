@@ -117,7 +117,7 @@ function App() {
       <LocalizationProvider dateAdapter={AdapterDayjs}>
         <CssBaseline />
         <Box sx={{ 
-          pb: { xs: 15, sm: 10 }, 
+          pb: 12, // Biztonságos távolság a navigációtól
           minHeight: '100vh', 
           background: 'radial-gradient(circle at 0% 0%, #050508 0%, #0a0a1f 50%, #050508 100%)',
           position: 'relative',

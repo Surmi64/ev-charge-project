@@ -96,40 +96,15 @@ const UploadChargingForm = ({ onSuccess }) => {
   };
 
   return (
-    <Box 
-      component="form" 
-      onSubmit={handleSubmit} 
-      sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        minHeight: { xs: 'calc(100dvh - 200px)', sm: 'auto' }, 
-        justifyContent: 'space-between',
-        pb: { xs: 8, sm: 2 } // Plusz hely a gomb alatt mobilon a biztonság kedvéért
-      }}
-    >
-      <Typography variant="h5" sx={{ mb: { xs: 1, sm: 3 }, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+    <Box component="form" onSubmit={handleSubmit} sx={{ pb: 2 }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ 
-        flexGrow: { xs: 1, sm: 0 }, 
-        display: 'flex', 
-        flexDirection: 'column', 
-        justifyContent: 'center',
-        borderRadius: 2, 
-        boxShadow: 2, 
-        mb: { xs: 2, sm: 4 },
-        transition: 'all 0.3s ease'
-      }}>
-        <CardContent sx={{ 
-          p: { xs: 2, sm: 3 }, 
-          '&:last-child': { pb: { xs: 2, sm: 3 } },
-          flexGrow: 1,
-          display: 'flex',
-          alignItems: 'center'
-        }}>
-          <Grid container spacing={{ xs: 2, sm: 3 }} sx={{ width: '100%', m: 0 }}>
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 2 }}>
+        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
               <DateTimePicker
                 label="Start"
                 value={startTime}
@@ -137,7 +112,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 slotProps={{ textField: { fullWidth: true, size: "small" } }}
               />
             </Grid>
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+            <Grid item xs={12}>
               <DateTimePicker
                 label="Stop"
                 value={endTime}
@@ -146,8 +121,7 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
 
-            {/* Full-width vertical layout for Provider, City, Charger */}
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+            <Grid item xs={12}>
               <Autocomplete
                 freeSolo
                 options={Object.keys(locationMapping)}
@@ -160,7 +134,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 renderInput={(params) => <TextField {...params} label="Provider" fullWidth size="small" />}
               />
             </Grid>
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+            <Grid item xs={12}>
               <Autocomplete
                 freeSolo
                 options={availableCities}
@@ -172,7 +146,7 @@ const UploadChargingForm = ({ onSuccess }) => {
                 renderInput={(params) => <TextField {...params} label="City" fullWidth size="small" />}
               />
             </Grid>
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+            <Grid item xs={12}>
               <Autocomplete
                 freeSolo
                 options={availableDetails}
@@ -182,39 +156,34 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
 
-            {/* Plug and Power side by side (6-6) */}
-            <Grid container item xs={12} spacing={2} sx={{ width: '100%', m: 0, p: '0 !important', mb: { xs: 2, sm: 3 } }}>
-              <Grid item xs={6} sx={{ pl: '0 !important' }}>
-                <TextField
-                  select
-                  fullWidth
-                  label="Plug"
-                  value={acOrDc}
-                  size="small"
-                  onChange={(e) => setAcOrDc(e.target.value)}
-                >
-                  <MenuItem value="AC">AC</MenuItem>
-                  <MenuItem value="DC">DC</MenuItem>
-                </TextField>
-              </Grid>
-
-              <Grid item xs={6} sx={{ pr: '0 !important' }}>
-                <TextField
-                  fullWidth
-                  label="Power"
-                  type="number"
-                  value={kw}
-                  size="small"
-                  onChange={(e) => setKw(e.target.value)}
-                  InputProps={{
-                    endAdornment: <InputAdornment position="end">kW</InputAdornment>,
-                  }}
-                />
-              </Grid>
+            <Grid item xs={6}>
+              <TextField
+                select
+                fullWidth
+                label="Plug"
+                value={acOrDc}
+                size="small"
+                onChange={(e) => setAcOrDc(e.target.value)}
+              >
+                <MenuItem value="AC">AC</MenuItem>
+                <MenuItem value="DC">DC</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                label="Power"
+                type="number"
+                value={kw}
+                size="small"
+                onChange={(e) => setKw(e.target.value)}
+                InputProps={{
+                  endAdornment: <InputAdornment position="end">kW</InputAdornment>,
+                }}
+              />
             </Grid>
 
-            {/* Energy Info */}
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 2, sm: 3 } }}>
+            <Grid item xs={12}>
               <TextField
                 fullWidth
                 label="Total Energy"
@@ -228,35 +197,33 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
             
-            <Grid container item xs={12} spacing={2} sx={{ width: '100%', m: 0, p: '0 !important', mb: { xs: 2, sm: 3 } }}>
-              <Grid item xs={8} sx={{ pl: '0 !important' }}>
-                <TextField
-                  fullWidth
-                  label="Cost"
-                  type="number"
-                  size="small"
-                  value={cost}
-                  onChange={(e) => setCost(e.target.value)}
-                  InputProps={{
-                    startAdornment: <InputAdornment position="start"><LocalAtm sx={{ fontSize: 20 }} /></InputAdornment>,
-                  }}
-                />
-              </Grid>
-              <Grid item xs={4} sx={{ pr: '0 !important' }}>
-                <TextField
-                  select
-                  fullWidth
-                  label="CCY"
-                  size="small"
-                  value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                >
-                  {currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
-                </TextField>
-              </Grid>
+            <Grid item xs={8}>
+              <TextField
+                fullWidth
+                label="Cost"
+                type="number"
+                size="small"
+                value={cost}
+                onChange={(e) => setCost(e.target.value)}
+                InputProps={{
+                  startAdornment: <InputAdornment position="start"><LocalAtm sx={{ fontSize: 20 }} /></InputAdornment>,
+                }}
+              />
+            </Grid>
+            <Grid item xs={4}>
+              <TextField
+                select
+                fullWidth
+                label="CCY"
+                size="small"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+              >
+                {currencies.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              </TextField>
             </Grid>
 
-            <Grid item xs={12} sx={{ width: '100%', p: '0 !important', mb: { xs: 1, sm: 2 } }}>
+            <Grid item xs={12}>
               <TextField
                 fullWidth
                 label="Odometer"
@@ -270,7 +237,7 @@ const UploadChargingForm = ({ onSuccess }) => {
               />
             </Grid>
             
-            <Grid item xs={12} sx={{ p: '0 !important' }}>
+            <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
                 Price: <strong>{pricePerKwh}</strong> {currency}/kWh
               </Typography>
@@ -287,10 +254,10 @@ const UploadChargingForm = ({ onSuccess }) => {
           disabled={loading || !kwh || !cost}
           startIcon={<Save />}
           sx={{ 
-            width: '100%', // Mobilon jobb a teljes szélesség
+            width: '100%', 
             maxWidth: '300px',
             borderRadius: 3, 
-            py: { xs: 1.2, sm: 1.8 }, 
+            py: 1.2, 
             fontWeight: 'bold' 
           }}
         >
