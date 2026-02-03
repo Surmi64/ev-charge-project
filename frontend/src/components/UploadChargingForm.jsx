@@ -12,7 +12,7 @@ const currencies = ["HUF", "EUR", "USD"];
 
 // Smart API URL handling with fallback
 const PRIMARY_API = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
-const FALLBACK_API = "http://192.168.0.111:5555"; // Your local fallback IP
+const FALLBACK_API = "http://192.168.0.111:5555"; // Updated based on logs
 
 const getBackendUrl = async () => {
   try {
