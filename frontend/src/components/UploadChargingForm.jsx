@@ -15,18 +15,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://100.104.111.43:5555";
 const UploadChargingForm = ({ onSuccess }) => {
   const [startTime, setStartTime] = useState(dayjs());
   const [endTime, setEndTime] = useState(dayjs().add(30, 'minute'));
-  const [kwh, setKwh] = useState("");
-  const [cost, setCost] = useState("");
-  const [currency, setCurrency] = useState("HUF");
-  const [provider, setProvider] = useState("");
-  const [city, setCity] = useState("");
-  const [locationDetail, setLocationDetail] = useState("");
-  const [acOrDc, setAcOrDc] = useState("AC");
-  const [kw, setKw] = useState("");
-  const [odometer, setOdometer] = useState("");
-  const [notes, setNotes] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [locationMapping, setLocationMapping] = useState({});
+  // ... (rest of state)
 
   useEffect(() => {
     fetch(`${API_URL}/charging_sessions/locations`)
@@ -99,13 +88,13 @@ const UploadChargingForm = ({ onSuccess }) => {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ pb: 1 }}>
-      <Typography variant="h5" sx={{ mb: 1, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 'bold', px: 1, color: 'primary.main', textAlign: 'center' }}>
         ⚡ EV CHARGE ENTRY ⚡
       </Typography>
 
-      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 1.5 }}>
-        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-          <Grid container spacing={1.5}>
+      <Card sx={{ borderRadius: 2, boxShadow: 2, mb: 2.5 }}>
+        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+          <Grid container spacing={2}>
             <Grid size={{ xs: 6 }}>
               <DateTimePicker
                 label="Start"
