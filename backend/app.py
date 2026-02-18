@@ -92,7 +92,7 @@ def update_charging_session(session_id):
             'vehicle_id', 'license_plate', 'start_time', 'end_time', 'kwh', 
             'duration_seconds', 'cost_huf', 'price_per_kwh', 'source', 
             'currency', 'notes', 'odometer', 'provider', 'city', 
-            'location_detail', 'ac_or_dc', 'kw'
+            'location_detail', 'ac_or_dc', 'kw', 'invoice_id', 'raw_payload'
         ]:
             if key in data:
                 fields_to_update.append(f"{key} = %s")
@@ -192,42 +192,6 @@ def get_charging_session_notes():
     notes_list = [row['notes'] for row in rows]
 
     return jsonify(notes_list), 200
-    
-@app.route('/charging_sessions/<session_id>', methods=['PUT'])
-def update_charging_session(session_id):
-    data = request.json
-    allowed_fields = [
-        "license_plate", "start_time", "end_time", "kwh",
-        "duration_seconds", "cost_huf", "price_per_kwh", "source",
-        "currency", "invoice_id", "notes", "odometer", "provider",
-        "city", "location_detail", "ac_or_dc", "kw"
-    ]
-
-    updates = {k: v for k, v in data.items() if k in allowed_fields}
-
-    if not updates:
-        return jsonify({"error": "No valid fields to update"}), 400
-
-    set_clause = ", ".join([f"{col} = %s" for col in updates.keys()])
-    values = list(updates.values())
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            f"UPDATE charging_sessions SET {set_clause} WHERE id = %s",
-            values + [session_id]
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return jsonify({"error": "Record not found"}), 404
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-    return jsonify({"status": "success"}), 200
 
 
 if __name__ == "__main__":
