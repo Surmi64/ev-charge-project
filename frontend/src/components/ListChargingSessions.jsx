@@ -66,7 +66,7 @@ const EditSessionDialog = ({ session, open, onClose, onSave, locationMapping }) 
       </DialogTitle>
       <DialogContent dividers>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
-          <Grid size={{ xs: 6 }}>
+          <Grid size={12}>
             <DateTimePicker
               label="Start"
               ampm={false}
@@ -75,7 +75,7 @@ const EditSessionDialog = ({ session, open, onClose, onSave, locationMapping }) 
               slotProps={{ textField: { fullWidth: true, size: "small" } }}
             />
           </Grid>
-          <Grid size={{ xs: 6 }}>
+          <Grid size={12}>
             <DateTimePicker
               label="Stop"
               ampm={false}
