@@ -107,14 +107,16 @@ const UploadChargingForm = ({ onSuccess }) => {
             <Grid size={12}>
               <DateTimePicker
                 label="Start"
+                ampm={false}
                 value={startTime}
                 onChange={(newValue) => setStartTime(newValue)}
                 slotProps={{ textField: { fullWidth: true, size: "small" } }}
               />
             </Grid>
-            <Grid size={12}>
+            <Grid size={{ xs: 6 }}>
               <DateTimePicker
                 label="Stop"
+                ampm={false}
                 value={endTime}
                 onChange={(newValue) => setEndTime(newValue)}
                 slotProps={{ textField: { fullWidth: true, size: "small" } }}

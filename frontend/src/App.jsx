@@ -5,7 +5,8 @@ import UploadChargingForm from './components/UploadChargingForm';
 import ListChargingSessions from './components/ListChargingSessions';
 import { Box, Container, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { LocalizationProvider } from '@mui/x-date-pickers';
-import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import 'dayjs/locale/hu';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('upload');
@@ -114,10 +115,9 @@ function App() {
 
   return (
     <ThemeProvider theme={theme}>
-      <LocalizationProvider dateAdapter={AdapterDayjs}>
-        <CssBaseline />
-        <Box sx={{ 
-          pb: 10, 
+      <CssBaseline />
+      <Box sx={{ 
+        pb: 10, 
           minHeight: '100vh', 
           background: 'radial-gradient(circle at 0% 0%, #050508 0%, #0a0a1f 50%, #050508 100%)',
           position: 'relative',
@@ -143,14 +143,15 @@ function App() {
             zIndex: 0,
           }
         }}>
-          <Container maxWidth="sm" sx={{ pt: 1, px: 2, position: 'relative', zIndex: 1 }}>
-            {currentPage === 'upload' && <UploadChargingForm onSuccess={() => setCurrentPage('list')} />}
-            {currentPage === 'list' && <ListChargingSessions />}
-          </Container>
-          <MobileNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+          <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="hu">
+            <Container maxWidth="sm" sx={{ pt: 1, px: 2, position: 'relative', zIndex: 1 }}>
+              {currentPage === 'upload' && <UploadChargingForm onSuccess={() => setCurrentPage('list')} />}
+              {currentPage === 'list' && <ListChargingSessions />}
+            </Container>
+            <MobileNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+          </LocalizationProvider>
         </Box>
-      </LocalizationProvider>
-    </ThemeProvider>
+      </ThemeProvider>
   );
 }
 
