@@ -79,6 +79,41 @@ def add_charging_session():
     return jsonify({"status": "success"}), 201
 
 
+@app.route('/charging_sessions/<int:session_id>', methods=['PUT', 'PATCH'])
+def update_charging_session(session_id):
+    data = request.json
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Build update query dynamically based on provided fields
+        fields_to_update = []
+        values = []
+        for key in [
+            'vehicle_id', 'license_plate', 'start_time', 'end_time', 'kwh', 
+            'duration_seconds', 'cost_huf', 'price_per_kwh', 'source', 
+            'currency', 'notes', 'odometer', 'provider', 'city', 
+            'location_detail', 'ac_or_dc', 'kw'
+        ]:
+            if key in data:
+                fields_to_update.append(f"{key} = %s")
+                values.append(data[key])
+        
+        if not fields_to_update:
+            return jsonify({"error": "No fields to update"}), 400
+            
+        values.append(session_id)
+        query = f"UPDATE charging_sessions SET {', '.join(fields_to_update)} WHERE id = %s"
+        cur.execute(query, tuple(values))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify({"status": "success"}), 200
+
 @app.route('/charging_sessions', methods=['GET'])
 def get_charging_sessions():
     conn = get_db_connection()
