@@ -69,6 +69,7 @@ const EditSessionDialog = ({ session, open, onClose, onSave, locationMapping }) 
           <Grid size={{ xs: 6 }}>
             <DateTimePicker
               label="Start"
+              ampm={false}
               value={formData.start_time}
               onChange={(val) => handleChange('start_time', val)}
               slotProps={{ textField: { fullWidth: true, size: "small" } }}
@@ -77,6 +78,7 @@ const EditSessionDialog = ({ session, open, onClose, onSave, locationMapping }) 
           <Grid size={{ xs: 6 }}>
             <DateTimePicker
               label="Stop"
+              ampm={false}
               value={formData.end_time}
               onChange={(val) => handleChange('end_time', val)}
               slotProps={{ textField: { fullWidth: true, size: "small" } }}
