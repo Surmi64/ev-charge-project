@@ -1,11 +1,17 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
+# Add a secret key for JWT
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-key-123')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+jwt = JWTManager(app)
 CORS(app)
 
 DB_HOST = os.environ.get('DB_HOST', 'localhost')
@@ -24,9 +30,137 @@ def get_db_connection():
     )
     return conn
 
-@app.route('/charging_sessions', methods=['POST'])
-def add_charging_session():
+# --- AUTH ROUTES ---
+
+@app.route('/auth/register', methods=['POST'])
+def register():
     data = request.json
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not username or not email or not password:
+        return jsonify({"error": "Missing username, email, or password"}), 400
+
+    password_hash = generate_password_hash(password)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s) RETURNING id;",
+            (username, email, password_hash)
+        )
+        user_id = cur.fetchone()[0]
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return jsonify({"error": "Username or email already exists"}), 409
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
+
+@app.route('/auth/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM users WHERE username = %s OR email = %s;", (username, username))
+        user = cur.fetchone()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+    if user and check_password_hash(user['password_hash'], password):
+        access_token = create_access_token(identity=str(user['id']))
+        return jsonify(access_token=access_token, user={"id": user['id'], "username": user['username'], "email": user['email']}), 200
+    else:
+        return jsonify({"error": "Invalid username or password"}), 401
+
+@app.route('/vehicles', methods=['GET', 'POST'])
+@jwt_required()
+def handle_vehicles():
+    user_id = get_jwt_identity()
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        if request.method == 'GET':
+            cur.execute("SELECT * FROM vehicles WHERE user_id = %s;", (user_id,))
+            vehicles = cur.fetchall()
+            return jsonify(vehicles), 200
+        
+        elif request.method == 'POST':
+            data = request.json
+            cur.execute(
+                "INSERT INTO vehicles (user_id, make, model, year, license_plate, battery_capacity_kwh) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+                (user_id, data.get('make'), data.get('model'), data.get('year'), data.get('license_plate'), data.get('battery_capacity_kwh'))
+            )
+            vehicle_id = cur.fetchone()['id']
+            conn.commit()
+            return jsonify({"message": "Vehicle created", "vehicle_id": vehicle_id}), 201
+            
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/expenses', methods=['GET', 'POST'])
+@jwt_required()
+def handle_expenses():
+    user_id = get_jwt_identity()
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        if request.method == 'GET':
+            cur.execute("SELECT * FROM expenses WHERE user_id = %s ORDER BY date DESC;", (user_id,))
+            expenses = cur.fetchall()
+            return jsonify(expenses), 200
+        
+        elif request.method == 'POST':
+            data = request.json
+            cur.execute(
+                "INSERT INTO expenses (user_id, vehicle_id, category, amount, currency, date, description) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id;",
+                (user_id, data.get('vehicle_id'), data.get('category'), data.get('amount'), data.get('currency', 'HUF'), data.get('date'), data.get('description'))
+            )
+            expense_id = cur.fetchone()['id']
+            conn.commit()
+            return jsonify({"message": "Expense created", "expense_id": expense_id}), 201
+            
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/charging_sessions', methods=['GET'])
+@jwt_required()
+def get_charging_sessions():
+    user_id = get_jwt_identity()
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM charging_sessions WHERE user_id = %s ORDER BY start_time DESC;", (user_id,))
+        sessions = cur.fetchall()
+        return jsonify(sessions), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
     required_fields = ['vehicle_id', 'start_time', 'kwh', 'cost_huf', 'source']
 
     if not all(field in data for field in required_fields):
@@ -197,3 +331,52 @@ def get_charging_session_notes():
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5555, debug=False)
 
+
+@app.get("/analytics/summary")
+def get_analytics_summary(current_user: User = Depends(get_current_user)):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Energy and Cost per Vehicle
+        cur.execute("""
+            SELECT v.name, v.license_plate, 
+                   SUM(cs.energy_kwh) as total_energy, 
+                   SUM(cs.cost_huf) as total_cost,
+                   COUNT(cs.id) as session_count
+            FROM vehicles v
+            LEFT JOIN charging_sessions cs ON v.id = cs.vehicle_id
+            WHERE v.user_id = %s
+            GROUP BY v.id, v.name, v.license_plate
+        """, (current_user.id,))
+        vehicle_stats = cur.fetchall()
+
+        # Average cost per kWh
+        cur.execute("""
+            SELECT AVG(cost_huf / NULLIF(energy_kwh, 0)) as avg_cost_per_kwh
+            FROM charging_sessions cs
+            JOIN vehicles v ON cs.vehicle_id = v.id
+            WHERE v.user_id = %s
+        """, (current_user.id,))
+        avg_cost = cur.fetchone()
+
+        # Weekly trend (last 8 weeks)
+        cur.execute("""
+            SELECT DATE_TRUNC('week', start_time) as week, 
+                   SUM(energy_kwh) as energy,
+                   SUM(cost_huf) as cost
+            FROM charging_sessions cs
+            JOIN vehicles v ON cs.vehicle_id = v.id
+            WHERE v.user_id = %s AND start_time > NOW() - INTERVAL '8 weeks'
+            GROUP BY week
+            ORDER BY week ASC
+        """, (current_user.id,))
+        weekly_trend = cur.fetchall()
+
+        return {
+            "vehicle_stats": vehicle_stats,
+            "avg_cost_per_kwh": avg_cost['avg_cost_per_kwh'] if avg_cost else 0,
+            "weekly_trend": weekly_trend
+        }
+    finally:
+        cur.close()
+        conn.close()

@@ -1,56 +1,54 @@
 import React from 'react';
 import { Paper, BottomNavigation, BottomNavigationAction } from '@mui/material';
-import { AddCircle, History, Assessment } from '@mui/icons-material';
+import { 
+  Dashboard as DashIcon, 
+  DirectionsCar as CarIcon, 
+  EvStation as ChargeIcon,
+  BarChart as AnalyticsIcon
+} from '@mui/icons-material';
+import { useNavigate, useLocation } from 'react-router-dom';
 
-const GRAFANA_URL = 'http://100.104.111.43:3000';
+const MobileNav = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
 
-const MobileNav = ({ currentPage, setCurrentPage }) => {
+  const getActiveTab = () => {
+    switch (location.pathname) {
+      case '/': return 0;
+      case '/vehicles': return 1;
+      case '/sessions': return 2;
+      case '/analytics': return 3;
+      default: return 0;
+    }
+  };
+
   return (
-    <Paper sx={{ 
-      position: 'fixed', 
-      bottom: 16, 
-      left: 16, 
-      right: 16, 
-      zIndex: 1000,
-      borderRadius: '24px',
-      overflow: 'hidden',
-      border: '1px solid rgba(255,255,255,0.1)',
-      background: 'rgba(22, 27, 34, 0.8)',
-      backdropFilter: 'blur(20px)',
-    }} elevation={10}>
+    <Paper 
+      sx={{ 
+        position: 'fixed', 
+        bottom: 0, 
+        left: 0, 
+        right: 0, 
+        display: { xs: 'block', sm: 'none' },
+        zIndex: 1000,
+        borderRadius: '20px 20px 0 0',
+        overflow: 'hidden',
+        boxShadow: '0 -5px 20px rgba(0,0,0,0.1)'
+      }} 
+      elevation={3}
+    >
       <BottomNavigation
         showLabels
-        value={currentPage}
+        value={getActiveTab()}
         onChange={(event, newValue) => {
-          setCurrentPage(newValue);
-        }}
-        sx={{
-          background: 'transparent',
-          height: 64,
-          '& .MuiBottomNavigationAction-root': {
-            color: 'rgba(255, 255, 255, 0.5)',
-            transition: 'all 0.3s ease',
-          },
-          '& .Mui-selected': {
-            color: '#00e676 !important',
-            '& .MuiBottomNavigationAction-label': {
-              fontWeight: 700,
-              fontSize: '0.85rem',
-            },
-            '& svg': {
-              transform: 'scale(1.2)',
-            }
-          },
+          const paths = ['/', '/vehicles', '/sessions', '/analytics'];
+          navigate(paths[newValue]);
         }}
       >
-        <BottomNavigationAction value="upload" label="Record" icon={<AddCircle />} />
-        <BottomNavigationAction value="list" label="Logs" icon={<History />} />
-        <BottomNavigationAction 
-          value="stats" 
-          label="Analytics" 
-          icon={<Assessment />} 
-          onClick={() => window.open(GRAFANA_URL, '_blank')}
-        />
+        <BottomNavigationAction label="Dash" icon={<DashIcon />} />
+        <BottomNavigationAction label="Cars" icon={<CarIcon />} />
+        <BottomNavigationAction label="Logs" icon={<ChargeIcon />} />
+        <BottomNavigationAction label="Stats" icon={<AnalyticsIcon />} />
       </BottomNavigation>
     </Paper>
   );
