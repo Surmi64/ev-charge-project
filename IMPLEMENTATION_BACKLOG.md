@@ -54,6 +54,7 @@ Stories:
 2. As a user, I can sign in with email and password.
 3. As a user, I can update my profile, password, and theme preference.
 4. As a user, I can recover access if I forget my password.
+5. As a user, I can persist my dashboard and analytics widget visibility preferences at account level.
 
 Tasks:
 
@@ -67,6 +68,7 @@ Tasks:
 | E1-06 | P1 | S | Add profile settings screen to main navigation. |
 | E1-07 | P1 | M | Add account-level security logs or at least auth event audit entries. |
 | E1-08 | P1 | S | Restrict CORS and remove insecure fallback secret behavior. |
+| E1-09 | P2 | M | Add backend-persisted user layout preferences for dashboard and analytics widget visibility, managed from Profile settings. |
 
 Status update:
 
@@ -145,6 +147,7 @@ Stories:
 1. As a user, I can see my total monthly vehicle cost.
 2. As a user, I can compare cost and usage per vehicle.
 3. As a user, I can understand charging versus fueling trends over time.
+4. As a user, I can hide analytics and dashboard widgets I do not need without breaking the layout.
 
 Tasks:
 
@@ -157,6 +160,7 @@ Tasks:
 | E4-05 | P1 | M | Add total cost by vehicle and cost trend charts. |
 | E4-06 | P2 | M | Add cost per 100 km metrics when odometer data is available. |
 | E4-07 | P2 | S | Add category breakdown chart for maintenance and other expenses. |
+| E4-08 | P2 | M | Assign stable widget IDs to dashboard and analytics cards and render sections from filtered widget lists instead of fixed slots. |
 
 Status update:
 
@@ -184,6 +188,7 @@ Tasks:
 | E5-04 | P1 | M | Review all screens for mobile spacing, bottom-nav overlap, and tap targets. |
 | E5-05 | P1 | S | Standardize English copy and status messages. |
 | E5-06 | P2 | S | Add skeleton loading states to dashboard, vehicles, and events screens. |
+| E5-07 | P2 | M | Add Profile controls for per-widget visibility toggles on Dashboard and Analytics, with a reset-to-default action. |
 
 ## Epic 6: Data Foundation And Schema Discipline
 

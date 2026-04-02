@@ -443,6 +443,7 @@ Feladatok:
 - email verifikáció,
 - account settings oldal,
 - theme, locale, currency preferenciák,
+- backendben mentett dashboard és analytics widget visibility preferenciák stabil widget ID-k alapján,
 - login rate limit és audit alapok.
 
 Megjegyzés:
@@ -465,6 +466,7 @@ Feladatok:
 - új auth layout,
 - dashboard újratervezés,
 - responsive layout rendszer,
+- dashboard és analytics layout felkészítése dinamikus widget renderre úgy, hogy a felhasználó által kikapcsolt boxok után ne maradjanak üres slotok,
 - empty state, onboarding state, loading skeletonök.
 
 Kimenet:
