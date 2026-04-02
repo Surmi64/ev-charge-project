@@ -1,13 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Rajdhani:wght@500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --garageos-bg: #070b0f;
+  --garageos-panel: rgba(13, 18, 24, 0.82);
+  --garageos-panel-strong: rgba(17, 24, 31, 0.94);
+  --garageos-steel: #9fb2c3;
+  --garageos-text: #eef7ff;
+  --garageos-muted: rgba(221, 232, 242, 0.72);
+  --garageos-cyan: #00f5ff;
+  --garageos-magenta: #ff00e5;
+  --garageos-line: rgba(255, 255, 255, 0.08);
+  --garageos-grid: rgba(255, 255, 255, 0.03);
+  --garageos-kicker: rgba(184, 245, 250, 0.84);
+  --garageos-subtitle: rgba(228, 234, 239, 0.72);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --garageos-bg: #e7edf1;
+  --garageos-panel: rgba(255, 255, 255, 0.74);
+  --garageos-panel-strong: rgba(248, 251, 253, 0.94);
+  --garageos-steel: #5f7283;
+  --garageos-text: #0d141b;
+  --garageos-muted: rgba(23, 34, 45, 0.72);
+  --garageos-line: rgba(17, 26, 34, 0.09);
+  --garageos-grid: rgba(17, 26, 34, 0.05);
+  --garageos-kicker: rgba(18, 93, 116, 0.88);
+  --garageos-subtitle: rgba(33, 46, 58, 0.78);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--garageos-bg);
+}
+
 body {
   margin: 0;
-  font-family: 'Roboto', sans-serif;
-  background-color: #f5f5f5;
+  min-height: 100vh;
+  color: var(--garageos-text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  background-color: var(--garageos-bg);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body[data-theme='light'] {
+  color-scheme: light;
+}
+
+a {
+  color: inherit;
 }
 
 #root {
-  height: 100vh;
+  min-height: 100vh;
   max-width: 100%;
   margin: 0 auto;
   padding: 0;
   text-align: left;
+}
+
+::selection {
+  background: rgba(0, 245, 255, 0.3);
+  color: #f8ffff;
 }

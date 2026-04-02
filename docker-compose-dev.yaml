@@ -1,8 +1,8 @@
-name: fuelup-dev
+name: garageos-dev
 services:
   db:
     image: postgres:17-alpine
-    container_name: ev_postgres-dev
+    container_name: garageos-postgres-dev
     restart: always
     environment:
       POSTGRES_USER: ev_user
@@ -10,6 +10,7 @@ services:
       POSTGRES_DB: ev_charger
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ./sql/phase0_bootstrap.sql:/docker-entrypoint-initdb.d/001-phase0-bootstrap.sql:ro
     ports:
       - "5435:5432"
     healthcheck:
@@ -20,16 +21,25 @@ services:
 
   backend:
     build: ./backend
-    container_name: ev_backend-dev
+    container_name: garageos-backend-dev
     restart: always
     environment:
+      APP_ENV: development
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: ev_charger
       DB_USER: ev_user
       DB_PASS: ev_password
+      JWT_SECRET_KEY: change-me-in-real-env
+      CORS_ALLOW_ORIGINS: http://localhost:4242,http://127.0.0.1:4242,http://localhost:4646,http://127.0.0.1:4646
     ports:
       - "4646:4646"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4646/ready', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy
@@ -39,12 +49,13 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: http://localhost:4646
-    container_name: ev_frontend-dev
+    container_name: garageos-frontend-dev
     restart: always
     ports:
       - "4242:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
       VITE_API_URL: http://localhost:4646
 

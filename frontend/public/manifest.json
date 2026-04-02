@@ -1,6 +1,6 @@
 {
-  "short_name": "EV Charge",
-  "name": "EV Charge Entry",
+  "short_name": "GarageOS",
+  "name": "GarageOS",
   "id": "/?source=pwa",
   "icons": [
     {
