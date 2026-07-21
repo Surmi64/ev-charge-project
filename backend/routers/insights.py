@@ -5,17 +5,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from backend.activity import get_activity_feed
     from backend.auth_utils import get_current_user_id
+    from backend.billing import get_tenant_db, require_write_access
     from backend.db import get_db
-    from backend.routers.expenses import ensure_recurring_expense_table
     from backend.routers.vehicles import has_archive_support
-    from backend.vehicle_events import backfill_vehicle_events, ensure_vehicle_events_table
+    from backend.vehicle_events import backfill_vehicle_events
 except ModuleNotFoundError:
     from activity import get_activity_feed
     from auth_utils import get_current_user_id
+    from billing import get_tenant_db, require_write_access
     from db import get_db
-    from routers.expenses import ensure_recurring_expense_table
     from routers.vehicles import has_archive_support
-    from vehicle_events import backfill_vehicle_events, ensure_vehicle_events_table
+    from vehicle_events import backfill_vehicle_events
 
 router = APIRouter(tags=['insights'])
 
@@ -114,10 +114,11 @@ def _empty_period(month: str) -> dict:
 
 
 @router.get('/dashboard/stats')
-def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_vehicle_events_table(db)
-    backfill_vehicle_events(db)
-    ensure_recurring_expense_table(db)
+def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+    # No backfill here: every write path (sessions, expenses, CSV import) already
+    # syncs into vehicle_events, and dev_seed.sql inserts them directly. Running it
+    # per request cost a full scan of both legacy tables on every read.
+    # Use POST /admin/reconcile-vehicle-events for a one-off reconciliation.
     cur = db.cursor()
     cur.execute(
         """
@@ -318,27 +319,35 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     avg_cost_per_100km = (total_distance_cost_huf / total_distance_km * 100) if total_distance_km > 0 else 0
     top_cost_vehicles = sorted(vehicle_stats, key=lambda vehicle: (float(vehicle.get('total_cost') or 0), vehicle.get('name') or ''), reverse=True)[:3]
 
+    # Each alert carries a stable id so the client can remember which ones the user
+    # dismissed. The id embeds whatever makes the situation current -- a count, or the
+    # month -- so a dismissed alert comes back when the underlying facts change rather
+    # than staying hidden forever.
     alerts = []
     if overdue_reminders:
         alerts.append({
+            'id': f'overdue-reminders:{overdue_reminders}',
             'level': 'warning',
             'title': 'Recurring reminders overdue',
             'description': f'{overdue_reminders} recurring expense reminder needs attention.',
         })
     if inactive_vehicle_count:
         alerts.append({
+            'id': f'inactive-vehicles:{inactive_vehicle_count}',
             'level': 'info',
             'title': 'Inactive vehicles',
             'description': f'{inactive_vehicle_count} vehicle has no tracked activity in the last 45 days.',
         })
     if previous_month['total_cost_huf'] > 0 and current_month['total_cost_huf'] > previous_month['total_cost_huf']:
         alerts.append({
+            'id': f"cost-increase:{current_month['month']}",
             'level': 'warning',
             'title': 'Monthly cost increased',
             'description': 'Current month operating cost is higher than the previous month.',
         })
     if not alerts:
         alerts.append({
+            'id': f"healthy:{current_month['month']}",
             'level': 'success',
             'title': 'Overview looks healthy',
             'description': 'No overdue reminders or unusual inactivity detected right now.',
@@ -505,10 +514,8 @@ def _fetch_monthly_stats(cur, user_id: str, start_date: date | None = None, end_
 def get_analytics_summary(
     range_key: str = Query('all', alias='range'),
     user_id: str = Depends(get_current_user_id),
-    db=Depends(get_db),
+    db=Depends(get_tenant_db),
 ):
-    ensure_vehicle_events_table(db)
-    backfill_vehicle_events(db)
     cur = db.cursor()
     normalized_range, start_date, end_date = _get_analytics_range_bounds(range_key)
 
@@ -697,10 +704,8 @@ def get_vehicle_analytics_drilldown(
     vehicle_id: int,
     range_key: str = Query('all', alias='range'),
     user_id: str = Depends(get_current_user_id),
-    db=Depends(get_db),
+    db=Depends(get_tenant_db),
 ):
-    ensure_vehicle_events_table(db)
-    backfill_vehicle_events(db)
     cur = db.cursor()
     normalized_range, start_date, end_date = _get_analytics_range_bounds(range_key)
 

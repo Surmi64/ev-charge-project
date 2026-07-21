@@ -2,10 +2,8 @@ from typing import Optional
 
 try:
     from backend.db import table_exists
-    from backend.vehicle_events import backfill_vehicle_events, ensure_vehicle_events_table
 except ModuleNotFoundError:
     from db import table_exists
-    from vehicle_events import backfill_vehicle_events, ensure_vehicle_events_table
 
 
 def get_activity_feed(
@@ -16,8 +14,10 @@ def get_activity_feed(
     vehicle_id: Optional[int] = None,
     search: Optional[str] = None,
 ):
-    ensure_vehicle_events_table(db)
-    backfill_vehicle_events(db)
+    # No backfill here: every write path (sessions, expenses, CSV import) already
+    # syncs into vehicle_events, and dev_seed.sql inserts them directly. Running it
+    # per request cost a full scan of both legacy tables on every read.
+    # Use scripts/reconcile-events.sh for a one-off reconciliation.
     cur = db.cursor()
 
     filters = []
@@ -73,8 +73,11 @@ def get_activity_feed(
             'id': row['id'],
             'event_id': row['event_id'],
             'legacy_source': row['legacy_source'],
+            # Every event is backed by a charging_sessions or expenses row, so edits and
+            # deletes go through those endpoints. Kept as explicit flags so the UI does
+            # not have to know the mapping.
             'can_edit': row['legacy_source'] in {'charging_session', 'expense'},
-            'can_delete': row['legacy_source'] in {'charging_session', 'expense', 'manual_seed'},
+            'can_delete': row['legacy_source'] in {'charging_session', 'expense'},
             'activity_type': row['activity_type'],
             'occurred_at': row['occurred_at'].isoformat() if row.get('occurred_at') else None,
             'amount_huf': float(row['amount_huf'] or 0),
@@ -95,8 +98,6 @@ def get_activity_export_rows(
     vehicle_id: Optional[int] = None,
     search: Optional[str] = None,
 ):
-    ensure_vehicle_events_table(db)
-    backfill_vehicle_events(db)
     cur = db.cursor()
 
     filters = []
@@ -126,6 +127,9 @@ def get_activity_export_rows(
             SELECT
                 ve.id::text AS event_id,
                 COALESCE(ve.legacy_id, ve.id)::text AS id,
+                -- id is cast to text for the API, so keep a numeric copy to sort on;
+                -- ordering by the text column puts row 9 after row 10.
+                ve.id AS event_id_sort,
                 ve.legacy_source::text AS legacy_source,
                 CASE WHEN ve.event_type IN ('charging', 'fueling') THEN 'session' ELSE 'expense' END::text AS activity_type,
                 ve.event_type::text AS event_type,
@@ -149,7 +153,7 @@ def get_activity_export_rows(
             WHERE ve.user_id = %s
         ) combined_activity
         {where_clause}
-        ORDER BY occurred_at DESC, id DESC;
+        ORDER BY occurred_at DESC, event_id_sort DESC;
         """,
         tuple(params),
     )

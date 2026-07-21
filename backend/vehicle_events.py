@@ -7,43 +7,6 @@ except ModuleNotFoundError:
 EXPENSE_EVENT_TYPES = {'maintenance', 'insurance', 'parking', 'toll', 'tax', 'inspection', 'cleaning'}
 
 
-def ensure_vehicle_events_table(db):
-    if table_exists(db, 'vehicle_events'):
-        return
-
-    cur = db.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vehicle_events (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            vehicle_id BIGINT REFERENCES vehicles(id) ON DELETE SET NULL,
-            legacy_source VARCHAR(20) NOT NULL,
-            legacy_id BIGINT NOT NULL,
-            event_type VARCHAR(30) NOT NULL CHECK (event_type IN ('charging', 'fueling', 'maintenance', 'insurance', 'parking', 'toll', 'tax', 'inspection', 'cleaning', 'other_expense')),
-            expense_category VARCHAR(30) CHECK (expense_category IS NULL OR expense_category IN ('maintenance', 'insurance', 'parking', 'toll', 'tax', 'inspection', 'cleaning', 'other')),
-            title VARCHAR(160),
-            occurred_at TIMESTAMPTZ NOT NULL,
-            ended_at TIMESTAMPTZ,
-            total_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
-            currency VARCHAR(10) NOT NULL DEFAULT 'HUF',
-            odometer_km NUMERIC(10,1),
-            source VARCHAR(80),
-            notes TEXT,
-            energy_kwh NUMERIC(10,2),
-            battery_level_start SMALLINT,
-            battery_level_end SMALLINT,
-            fuel_liters NUMERIC(10,2),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT vehicle_events_unique_legacy_uidx UNIQUE (legacy_source, legacy_id)
-        );
-        """
-    )
-    cur.execute('CREATE INDEX IF NOT EXISTS vehicle_events_user_id_idx ON vehicle_events (user_id, occurred_at DESC);')
-    cur.execute('CREATE INDEX IF NOT EXISTS vehicle_events_vehicle_id_idx ON vehicle_events (vehicle_id, occurred_at DESC);')
-
-
 def normalize_expense_event_type(category: str | None) -> str:
     if category in EXPENSE_EVENT_TYPES:
         return category
@@ -59,7 +22,6 @@ def normalize_expense_category(category: str | None) -> str | None:
 
 
 def backfill_vehicle_events(db):
-    ensure_vehicle_events_table(db)
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
 
@@ -130,7 +92,6 @@ def backfill_vehicle_events(db):
 
 
 def sync_session_to_vehicle_event(db, session_id: int):
-    ensure_vehicle_events_table(db)
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     cur.execute(
@@ -208,7 +169,6 @@ def sync_session_to_vehicle_event(db, session_id: int):
 
 
 def sync_expense_to_vehicle_event(db, expense_id: int):
-    ensure_vehicle_events_table(db)
     cur = db.cursor()
     cur.execute(
         """
