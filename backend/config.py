@@ -8,6 +8,10 @@ def _get_bool_env(name: str, default: bool = False) -> bool:
 	return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+# Optional: the one account auto-promoted to admin on sign-up. Empty by default so a
+# stock deployment grants nobody elevated access.
+BOOTSTRAP_ADMIN_EMAIL = os.environ.get('BOOTSTRAP_ADMIN_EMAIL', '').strip()
+
 APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
 IS_DEVELOPMENT = APP_ENV in {'dev', 'development', 'local'}
 
@@ -39,5 +43,17 @@ CORS_ALLOW_CREDENTIALS = _get_bool_env('CORS_ALLOW_CREDENTIALS', True)
 DB_HOST = os.environ.get('DB_HOST', 'localhost')
 DB_PORT = os.environ.get('DB_PORT', 5432)
 DB_NAME = os.environ.get('DB_NAME', 'ev_charger')
+# Migrations run as the owner (DB_USER). The API connects as DB_APP_USER, which must
+# be a non-superuser without BYPASSRLS or the row level security policies are skipped.
 DB_USER = os.environ.get('DB_USER', 'postgres')
 DB_PASS = os.environ.get('DB_PASS', 'password')
+DB_APP_USER = os.environ.get('DB_APP_USER', DB_USER)
+DB_APP_PASS = os.environ.get('DB_APP_PASS', DB_PASS)
+
+# Subscription plans. Amounts are in cents to avoid float rounding.
+TRIAL_DAYS = int(os.environ.get('TRIAL_DAYS', '30'))
+BILLING_CURRENCY = os.environ.get('BILLING_CURRENCY', 'EUR')
+PLAN_PRICES = {
+	'monthly': {'amount_cents': 500, 'currency': BILLING_CURRENCY, 'interval': 'month'},
+	'yearly': {'amount_cents': 5000, 'currency': BILLING_CURRENCY, 'interval': 'year'},
+}

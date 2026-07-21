@@ -30,6 +30,12 @@ services:
       DB_NAME: ev_charger
       DB_USER: ev_user
       DB_PASS: ev_password
+      # The API connects as a non-superuser role so row level security applies to it.
+      # DB_USER above stays the owner and is used for migrations.
+      # Auto-promote this address to admin on sign-up. Leave unset in production.
+      BOOTSTRAP_ADMIN_EMAIL: surmi64@gmail.com
+      DB_APP_USER: garageos_app
+      DB_APP_PASS: garageos_app_password
       JWT_SECRET_KEY: change-me-in-real-env
       CORS_ALLOW_ORIGINS: http://localhost:4242,http://127.0.0.1:4242,http://localhost:4646,http://127.0.0.1:4646
     ports:

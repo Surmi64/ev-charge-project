@@ -15,13 +15,13 @@ try:
         pwd_context,
         validate_password_strength,
     )
-    from backend.config import IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from backend.config import BOOTSTRAP_ADMIN_EMAIL, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
     from backend.schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
 except ModuleNotFoundError:
     from auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
     from auth_utils import create_access_token, create_refresh_token, get_current_user_id, hash_token, pwd_context, validate_password_strength
-    from config import IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from config import BOOTSTRAP_ADMIN_EMAIL, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
     from schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
 
@@ -37,103 +37,25 @@ def get_client_ip(request: Request | None):
 
 
 def ensure_user_roles(db):
-    if column_exists(db, 'users', 'role'):
-        cur = db.cursor()
-        cur.execute("UPDATE users SET role = 'admin' WHERE LOWER(email) = LOWER(%s);", ('surmi64@gmail.com',))
+    """Promote the configured bootstrap account to admin, once.
+
+    This used to ALTER the users table on every auth request and hard-coded a
+    personal address. The schema now comes from migrations, and the address is
+    configuration, so a stock deployment promotes nobody.
+    """
+    if not BOOTSTRAP_ADMIN_EMAIL:
+        return
+
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE users SET role = 'admin' WHERE LOWER(email) = LOWER(%s) AND role <> 'admin';",
+        (BOOTSTRAP_ADMIN_EMAIL,),
+    )
+    if cur.rowcount:
         db.commit()
-        return
-
-    cur = db.cursor()
-    cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';")
-    cur.execute(
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'users_role_chk'
-            ) THEN
-                ALTER TABLE users ADD CONSTRAINT users_role_chk CHECK (role IN ('admin', 'user'));
-            END IF;
-        END $$;
-        """
-    )
-    cur.execute("UPDATE users SET role = 'admin' WHERE LOWER(email) = LOWER(%s);", ('surmi64@gmail.com',))
-    db.commit()
-
-
-def ensure_user_sessions_table(db):
-    if table_exists(db, 'user_sessions'):
-        return
-
-    cur = db.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS user_sessions (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            token_hash VARCHAR(255) NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL,
-            revoked_at TIMESTAMPTZ,
-            last_used_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
-    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS user_sessions_token_hash_uidx ON user_sessions (token_hash);')
-    cur.execute('CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);')
-    db.commit()
-
-
-def ensure_auth_audit_logs_table(db):
-    if table_exists(db, 'auth_audit_logs'):
-        return
-
-    cur = db.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS auth_audit_logs (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-            email VARCHAR(255),
-            event_type VARCHAR(50) NOT NULL,
-            status VARCHAR(20) NOT NULL,
-            ip_address VARCHAR(64),
-            details JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
-    cur.execute('CREATE INDEX IF NOT EXISTS auth_audit_logs_user_id_idx ON auth_audit_logs (user_id, created_at DESC);')
-    cur.execute('CREATE INDEX IF NOT EXISTS auth_audit_logs_event_type_idx ON auth_audit_logs (event_type, created_at DESC);')
-    db.commit()
-
-
-def ensure_password_reset_tokens_table(db):
-    if table_exists(db, 'password_reset_tokens'):
-        return
-
-    cur = db.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS password_reset_tokens (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            token_hash VARCHAR(255) NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL,
-            used_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
-    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS password_reset_tokens_token_hash_uidx ON password_reset_tokens (token_hash);')
-    cur.execute('CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id_idx ON password_reset_tokens (user_id, created_at DESC);')
-    db.commit()
 
 
 def log_auth_event(db, event_type: str, status: str, user_id=None, email=None, ip_address=None, details=None):
-    ensure_auth_audit_logs_table(db)
     cur = db.cursor()
     cur.execute(
         """
@@ -165,7 +87,6 @@ def build_auth_payload(db_user: dict, access_token: str, refresh_token: str):
 
 
 def create_session_tokens(db, db_user: dict):
-    ensure_user_sessions_table(db)
     refresh_token, refresh_expires_at = create_refresh_token()
     refresh_hash = hash_token(refresh_token)
     access_token = create_access_token(data={'sub': str(db_user['id'])})
@@ -200,7 +121,7 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
     try:
         cur.execute(
             'INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s) RETURNING id;',
-            (user.username, user.email, pwd_hash, 'admin' if user.email.lower() == 'surmi64@gmail.com' else 'user'),
+            (user.username, user.email, pwd_hash, 'admin' if BOOTSTRAP_ADMIN_EMAIL and user.email.lower() == BOOTSTRAP_ADMIN_EMAIL.lower() else 'user'),
         )
         user_id = cur.fetchone()['id']
         db.commit()
@@ -221,7 +142,6 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
 def login(user: UserLogin, request: Request, db=Depends(get_db)):
     check_login_rate_limit(user.email)
     ensure_user_roles(db)
-    ensure_user_sessions_table(db)
     cur = db.cursor()
     cur.execute('SELECT * FROM users WHERE LOWER(email) = LOWER(%s);', (user.email,))
     db_user = cur.fetchone()
@@ -247,7 +167,6 @@ def login(user: UserLogin, request: Request, db=Depends(get_db)):
 @router.post('/auth/refresh')
 def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(get_db)):
     ensure_user_roles(db)
-    ensure_user_sessions_table(db)
     cur = db.cursor()
     refresh_hash = hash_token(payload.refresh_token)
     cur.execute(
@@ -295,7 +214,14 @@ def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(g
     db.commit()
 
     return build_auth_payload(
-        {'id': session['user_id'], 'username': session['username'], 'email': session['email']},
+        # role must be carried through: build_auth_payload falls back to 'user', so
+        # omitting it silently demoted admins in the client state on every refresh.
+        {
+            'id': session['user_id'],
+            'username': session['username'],
+            'email': session['email'],
+            'role': session.get('role', 'user'),
+        },
         access_token,
         new_refresh_token,
     )
@@ -303,7 +229,6 @@ def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(g
 
 @router.post('/auth/logout')
 def logout(payload: LogoutRequest, request: Request, db=Depends(get_db)):
-    ensure_user_sessions_table(db)
     cur = db.cursor()
     refresh_hash = hash_token(payload.refresh_token)
     cur.execute('SELECT id, user_id FROM user_sessions WHERE token_hash = %s LIMIT 1;', (refresh_hash,))
@@ -326,7 +251,6 @@ def logout(payload: LogoutRequest, request: Request, db=Depends(get_db)):
 
 @router.post('/auth/forgot-password')
 def forgot_password(payload: ForgotPasswordRequest, request: Request, db=Depends(get_db)):
-    ensure_password_reset_tokens_table(db)
     cur = db.cursor()
     cur.execute('SELECT id, email FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1;', (payload.email,))
     db_user = cur.fetchone()
@@ -365,8 +289,6 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db=Depends
 @router.post('/auth/reset-password')
 def reset_password(payload: ResetPasswordRequest, request: Request, db=Depends(get_db)):
     validate_password_strength(payload.new_password)
-    ensure_password_reset_tokens_table(db)
-    ensure_user_sessions_table(db)
     cur = db.cursor()
     cur.execute(
         """
@@ -409,15 +331,19 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db=Depends(g
 def get_profile(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
     ensure_user_roles(db)
     cur = db.cursor()
+    columns = ['id', 'username', 'email', 'role', 'created_at']
     if column_exists(db, 'users', 'theme_mode'):
-        cur.execute('SELECT id, username, email, role, created_at, theme_mode FROM users WHERE id = %s;', (user_id,))
-    else:
-        cur.execute('SELECT id, username, email, role, created_at FROM users WHERE id = %s;', (user_id,))
+        columns.append('theme_mode')
+    if column_exists(db, 'users', 'dismissed_alerts'):
+        columns.append('dismissed_alerts')
+
+    cur.execute(f"SELECT {', '.join(columns)} FROM users WHERE id = %s;", (user_id,))
     user = cur.fetchone()
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
     user.setdefault('theme_mode', 'dark')
     user.setdefault('role', 'user')
+    user.setdefault('dismissed_alerts', [])
     return user
 
 
@@ -427,7 +353,6 @@ def get_security_log(
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
 ):
-    ensure_auth_audit_logs_table(db)
     cur = db.cursor()
     cur.execute('SELECT email FROM users WHERE id = %s LIMIT 1;', (user_id,))
     user_row = cur.fetchone()
@@ -455,6 +380,7 @@ def update_profile(
     current_password: str | None = Body(None),
     new_password: str | None = Body(None),
     theme_mode: str | None = Body(None),
+    dismissed_alerts: list[str] | None = Body(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
 ):
@@ -488,6 +414,12 @@ def update_profile(
         updates.append('theme_mode = %s')
         values.append(theme_mode)
 
+    # A full replace rather than an append: the client sends the pruned list, so ids
+    # for situations that no longer exist drop out instead of accumulating forever.
+    if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
+        updates.append('dismissed_alerts = %s')
+        values.append(Json(dismissed_alerts))
+
     if not updates:
         return {'message': 'No changes requested'}
 
@@ -505,6 +437,8 @@ def update_profile(
             changed_fields.append('password')
         if theme_mode and column_exists(db, 'users', 'theme_mode'):
             changed_fields.append('theme_mode')
+        if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
+            changed_fields.append('dismissed_alerts')
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})
         db.commit()
         return {'message': 'Profile updated successfully'}

@@ -13,6 +13,7 @@ try:
     from backend.logging_utils import configure_logging, log_event
     from backend.routers.activity import router as activity_router
     from backend.routers.auth import router as auth_router
+    from backend.routers.billing import router as billing_router
     from backend.routers.expenses import router as expenses_router
     from backend.routers.health import router as health_router
     from backend.routers.insights import router as insights_router
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
     from logging_utils import configure_logging, log_event
     from routers.activity import router as activity_router
     from routers.auth import router as auth_router
+    from routers.billing import router as billing_router
     from routers.expenses import router as expenses_router
     from routers.health import router as health_router
     from routers.insights import router as insights_router
@@ -122,6 +124,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(billing_router)
 app.include_router(admin_router)
 app.include_router(vehicles_router)
 app.include_router(expenses_router)

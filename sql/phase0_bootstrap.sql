@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     theme_mode VARCHAR(10) NOT NULL DEFAULT 'dark' CHECK (theme_mode IN ('dark', 'light')),
     email_verified_at TIMESTAMPTZ,
     last_login_at TIMESTAMPTZ,
+    dismissed_alerts JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -216,5 +217,103 @@ CREATE INDEX IF NOT EXISTS vehicle_events_vehicle_id_idx ON vehicle_events (vehi
 CREATE INDEX IF NOT EXISTS vehicle_events_user_event_type_date_idx ON vehicle_events (user_id, event_type, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS vehicle_events_user_vehicle_date_idx ON vehicle_events (user_id, vehicle_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS vehicle_events_expense_category_date_idx ON vehicle_events (expense_category, occurred_at DESC) WHERE expense_category IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Subscriptions (Alembic 20260721_000006)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    plan VARCHAR(20) NOT NULL DEFAULT 'trial' CHECK (plan IN ('trial', 'monthly', 'yearly')),
+    status VARCHAR(20) NOT NULL DEFAULT 'trialing'
+        CHECK (status IN ('trialing', 'active', 'past_due', 'canceled', 'expired')),
+    trial_ends_at TIMESTAMPTZ,
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+    provider VARCHAR(30),
+    provider_customer_id VARCHAR(120),
+    provider_subscription_id VARCHAR(120),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS subscriptions_user_id_idx ON subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS subscriptions_status_idx ON subscriptions (status, current_period_end);
+
+-- ---------------------------------------------------------------------------
+-- Tenant isolation (Alembic 20260721_000007)
+--
+-- The API connects as garageos_app, which must not be a superuser and must not
+-- have BYPASSRLS, otherwise these policies are silently skipped. get_tenant_db
+-- sets app.user_id once per request; a query that forgets its WHERE clause then
+-- returns no rows instead of every row.
+-- ---------------------------------------------------------------------------
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'garageos_app') THEN
+        CREATE ROLE garageos_app LOGIN PASSWORD 'garageos_app_password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+    END IF;
+END
+$$;
+
+GRANT USAGE ON SCHEMA public TO garageos_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO garageos_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO garageos_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO garageos_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO garageos_app;
+
+DO $$
+DECLARE
+    tenant_table TEXT;
+    admin_table TEXT;
+BEGIN
+    -- User content: reachable only by its owner. No admin escape on purpose.
+    FOREACH tenant_table IN ARRAY ARRAY['vehicles', 'charging_sessions', 'expenses',
+                                        'vehicle_events', 'recurring_expense_reminders']
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I;', tenant_table || '_tenant_isolation', tenant_table);
+        EXECUTE format(
+            'CREATE POLICY %I ON %I USING (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint)'
+            ' WITH CHECK (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint);',
+            tenant_table || '_tenant_isolation', tenant_table);
+    END LOOP;
+
+    -- Billing metadata: the owner, plus admins doing user management.
+    FOREACH admin_table IN ARRAY ARRAY['subscriptions']
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', admin_table);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', admin_table);
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I;', admin_table || '_tenant_isolation', admin_table);
+        EXECUTE format(
+            'CREATE POLICY %I ON %I USING (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint'
+            ' OR current_setting(''app.admin'', true) = ''on'')'
+            ' WITH CHECK (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint'
+            ' OR current_setting(''app.admin'', true) = ''on'');',
+            admin_table || '_tenant_isolation', admin_table);
+    END LOOP;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Migration bookkeeping
+--
+-- This file creates the schema Alembic would produce at head, so stamp it as
+-- such. Without this a fresh database looks unmigrated and `alembic upgrade
+-- head` would try to re-create everything.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS alembic_version (
+    version_num VARCHAR(32) NOT NULL CONSTRAINT alembic_version_pkc PRIMARY KEY
+);
+
+INSERT INTO alembic_version (version_num)
+SELECT '20260721_000008'
+WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

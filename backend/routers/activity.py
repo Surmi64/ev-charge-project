@@ -9,13 +9,15 @@ from fastapi.responses import Response
 try:
     from backend.activity import get_activity_export_rows, get_activity_feed
     from backend.auth_utils import get_current_user_id
-    from backend.db import get_db
+    from backend.billing import get_tenant_db, require_write_access
+    from backend.db import get_vehicle_column
     from backend.vehicle_events import sync_expense_to_vehicle_event, sync_session_to_vehicle_event
     from backend.vehicle_rules import validate_session_for_vehicle, validate_vehicle_reference
 except ModuleNotFoundError:
     from activity import get_activity_export_rows, get_activity_feed
     from auth_utils import get_current_user_id
-    from db import get_db
+    from billing import get_tenant_db, require_write_access
+    from db import get_vehicle_column
     from vehicle_events import sync_expense_to_vehicle_event, sync_session_to_vehicle_event
     from vehicle_rules import validate_session_for_vehicle, validate_vehicle_reference
 
@@ -79,10 +81,23 @@ def parse_date_value(value: str | None, field_name: str, required: bool = False)
         if required:
             raise HTTPException(status_code=400, detail=f'{field_name} is required')
         return None
+
+    normalized = str(value).strip()
     try:
-        return date.fromisoformat(str(value).strip())
+        return date.fromisoformat(normalized)
+    except ValueError:
+        pass
+
+    # The CSV export writes occurred_at from a TIMESTAMPTZ, so expense rows come back
+    # as full ISO timestamps. Accept those and keep the date part, otherwise an
+    # exported file can never be re-imported.
+    try:
+        return datetime.fromisoformat(normalized.replace('Z', '+00:00')).date()
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f'{field_name} must use YYYY-MM-DD format') from exc
+        raise HTTPException(
+            status_code=400,
+            detail=f'{field_name} must use YYYY-MM-DD format or an ISO timestamp',
+        ) from exc
 
 
 def normalize_text(value: str | None) -> str | None:
@@ -150,10 +165,12 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
         battery_level_end = parse_integer(row.get('battery_level_end'), 'battery_level_end')
 
         validate_session_for_vehicle(db, user_id, vehicle_id, session_type, energy_kwh, fuel_liters)
+        # Match sessions.py: the vehicle FK column name differs across migration states.
+        vehicle_column = get_vehicle_column(db)
         cur.execute(
-            """
+            f"""
             INSERT INTO charging_sessions (
-                user_id, vehicle_id, session_type, start_time, end_time, kwh, fuel_liters,
+                user_id, {vehicle_column}, session_type, start_time, end_time, kwh, fuel_liters,
                 cost_huf, source, battery_level_start, battery_level_end, odometer, notes, created_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
@@ -201,32 +218,9 @@ def get_activity(
     vehicle_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
     user_id: str = Depends(get_current_user_id),
-    db=Depends(get_db),
+    db=Depends(get_tenant_db),
 ):
     return get_activity_feed(db, user_id, limit=limit, activity_type=activity_type, vehicle_id=vehicle_id, search=search)
-
-
-@router.delete('/activity/{event_id}')
-def delete_activity_event(event_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    cur = db.cursor()
-    cur.execute(
-        'SELECT id, legacy_source FROM vehicle_events WHERE id = %s AND user_id = %s LIMIT 1;',
-        (event_id, user_id),
-    )
-    event = cur.fetchone()
-    if not event:
-        raise HTTPException(status_code=404, detail='Activity entry not found')
-
-    if event['legacy_source'] != 'manual_seed':
-        raise HTTPException(status_code=400, detail='Only seeded historical activity entries can be deleted here')
-
-    try:
-        cur.execute('DELETE FROM vehicle_events WHERE id = %s AND user_id = %s;', (event_id, user_id))
-        db.commit()
-        return {'message': 'Historical activity entry deleted successfully'}
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get('/activity/export.csv')
@@ -235,7 +229,7 @@ def export_activity_csv(
     vehicle_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
     user_id: str = Depends(get_current_user_id),
-    db=Depends(get_db),
+    db=Depends(get_tenant_db),
 ):
     rows = get_activity_export_rows(db, user_id, activity_type=activity_type, vehicle_id=vehicle_id, search=search)
     output = io.StringIO()
@@ -274,7 +268,12 @@ def export_activity_csv(
 
 
 @router.post('/activity/import-csv')
-async def import_activity_csv(file: UploadFile = File(...), user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+async def import_activity_csv(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+    _subscription=Depends(require_write_access),
+    db=Depends(get_tenant_db),
+):
     filename = (file.filename or '').lower()
     if not filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail='Only CSV files are supported')

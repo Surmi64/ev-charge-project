@@ -42,6 +42,12 @@ class UserRoleUpdateRequest(BaseModel):
     role: str
 
 
+class SubscriptionUpdateRequest(BaseModel):
+    # Either set a paid plan (which starts a fresh period) or force a status directly.
+    plan: Optional[str] = None
+    status: Optional[str] = None
+
+
 class VehicleCreate(BaseModel):
     name: Optional[str] = None
     make: str
