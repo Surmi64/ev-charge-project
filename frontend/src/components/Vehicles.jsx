@@ -19,6 +19,8 @@ import { toast } from 'sonner';
 import { requiresBatteryCapacity } from '../utils/vehicleRules';
 import { getFuelBoxSx, getFuelChipSx } from '../utils/fuelVisuals';
 import { TableSectionSkeleton } from './SectionSkeletons';
+import { apiFetch } from '../utils/api';
+import { useDelayedLoading } from '../utils/useDelayedLoading';
 
 const FUEL_TYPES = [
   { value: 'electric', label: 'Electric', icon: <EvIcon fontSize="small" /> },
@@ -81,6 +83,8 @@ const validateVehicleForm = (formData) => {
 const Vehicles = () => {
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Skip the placeholder entirely when the data beats the delay.
+  const showSkeleton = useDelayedLoading(loading);
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState(null);
@@ -97,9 +101,7 @@ const Vehicles = () => {
 
   const fetchVehicles = async () => {
     try {
-      const response = await fetch('/api/vehicles?include_archived=true', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
+      const response = await apiFetch('/api/vehicles?include_archived=true');
       if (!response.ok) throw new Error('Failed to fetch vehicles');
       const data = await response.json();
       setVehicles(data);
@@ -118,9 +120,8 @@ const Vehicles = () => {
   const archivedVehicles = vehicles.filter((vehicle) => vehicle.is_archived);
   const visibleVehicles = showArchived ? vehicles : activeVehicles;
 
-  if (loading) {
-    return <TableSectionSkeleton rows={4} />;
-  }
+  if (showSkeleton) return <TableSectionSkeleton rows={4} />;
+  if (loading) return null;
 
   const handleOpen = (vehicle = null) => {
     setSubmitAttempted(false);
@@ -160,12 +161,8 @@ const Vehicles = () => {
     const method = editingVehicle ? 'PATCH' : 'POST';
     try {
       setSubmitSubmitting(true);
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({
           ...formData,
           year: formData.year ? parseInt(formData.year) : null,
@@ -218,10 +215,9 @@ const Vehicles = () => {
     try {
       setDeleteSubmitting(true);
       setBusyVehicleId(pendingDeleteVehicle.id);
-      const response = await fetch(`/api/vehicles/${pendingDeleteVehicle.id}`, {
+      const response = await apiFetch(`/api/vehicles/${pendingDeleteVehicle.id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
+              });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || 'Failed to delete vehicle');
@@ -241,12 +237,8 @@ const Vehicles = () => {
   const toggleArchive = async (vehicle) => {
     try {
       setBusyVehicleId(vehicle.id);
-      const response = await fetch(`/api/vehicles/${vehicle.id}`, {
+      const response = await apiFetch(`/api/vehicles/${vehicle.id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ is_archived: !vehicle.is_archived })
       });
       if (!response.ok) {
@@ -265,12 +257,8 @@ const Vehicles = () => {
   const toggleDefault = async (vehicle) => {
     try {
       setBusyVehicleId(vehicle.id);
-      await fetch(`/api/vehicles/${vehicle.id}`, {
+      await apiFetch(`/api/vehicles/${vehicle.id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ is_default: !vehicle.is_default })
       });
       fetchVehicles();
@@ -282,8 +270,8 @@ const Vehicles = () => {
   };
 
   return (
-    <Box className="section-shell">
-      <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
+    <Box className="section-shell stagger">
+      <Typography variant="h4" component="h1" fontWeight={800} sx={{ mb: 1 }}>
         Vehicles
       </Typography>
 
@@ -312,9 +300,18 @@ const Vehicles = () => {
               {visibleVehicles.map((v) => (
                 <TableRow key={v.id} sx={v.is_archived ? { opacity: 0.62 } : undefined}>
                   <TableCell>
-                    <IconButton onClick={() => toggleDefault(v)} color={v.is_default ? "primary" : "default"} disabled={v.is_archived || busyVehicleId === v.id}>
-                      {v.is_default ? <StarIcon /> : <StarBorderIcon />}
-                    </IconButton>
+                    <Tooltip title={v.is_default ? `${v.name || 'Unnamed'} is the default vehicle` : `Set ${v.name || 'Unnamed'} as default vehicle`}>
+                      <span>
+                        <IconButton
+                          onClick={() => toggleDefault(v)}
+                          color={v.is_default ? "primary" : "default"}
+                          disabled={v.is_archived || busyVehicleId === v.id}
+                          aria-pressed={!!v.is_default}
+                        >
+                          {v.is_default ? <StarIcon /> : <StarBorderIcon />}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">

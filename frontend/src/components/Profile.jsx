@@ -5,6 +5,7 @@ import { useAuth } from '../context/useAuth';
 import { toast } from 'sonner';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
+import { apiFetch } from '../utils/api';
 
 const Profile = () => {
     const { token, user, updateUser, loading: authLoading } = useAuth();
@@ -36,11 +37,7 @@ const Profile = () => {
             }
 
             try {
-                const res = await fetch('/api/auth/security-log?limit=10', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                    },
-                });
+                const res = await apiFetch('/api/auth/security-log?limit=10');
                 if (!res.ok) throw new Error('Failed to load security activity');
                 setSecurityLog(await res.json());
             } catch {
@@ -76,12 +73,8 @@ const Profile = () => {
 
         setLoading(true);
         try {
-            const res = await fetch('/api/auth/me', {
+            const res = await apiFetch('/api/auth/me', {
                 method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
                 body: JSON.stringify({
                     username: formData.username !== user.username ? formData.username : undefined,
                     email: formData.email !== user.email ? formData.email : undefined,
@@ -97,11 +90,7 @@ const Profile = () => {
                     username: formData.username,
                     email: formData.email,
                 });
-                const securityRes = await fetch('/api/auth/security-log?limit=10', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                    },
-                });
+                const securityRes = await apiFetch('/api/auth/security-log?limit=10');
                 if (securityRes.ok) {
                     setSecurityLog(await securityRes.json());
                 }
@@ -130,8 +119,8 @@ const Profile = () => {
     };
 
     return (
-        <Box className="section-shell" sx={{ maxWidth: 1100, mx: 'auto' }}>
-            <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
+        <Box className="section-shell stagger" sx={{ maxWidth: 1100, mx: 'auto' }}>
+            <Typography variant="h4" component="h1" fontWeight={800} sx={{ mb: 1 }}>
                 Profile Settings
             </Typography>
 

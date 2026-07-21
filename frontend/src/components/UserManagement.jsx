@@ -23,6 +23,8 @@ import { alpha } from '@mui/material/styles';
 import { toast } from 'sonner';
 import { useAuth } from '../context/useAuth';
 import { TableSectionSkeleton } from './SectionSkeletons';
+import { apiFetch } from '../utils/api';
+import { useDelayedLoading } from '../utils/useDelayedLoading';
 
 const ROLE_OPTIONS = ['user', 'admin'];
 
@@ -39,15 +41,15 @@ function UserManagement() {
   const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Skip the placeholder entirely when the data beats the delay.
+  const showSkeleton = useDelayedLoading(loading);
   const [savingUserId, setSavingUserId] = useState(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetTokenData, setResetTokenData] = useState(null);
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('/api/admin/users', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      });
+      const res = await apiFetch('/api/admin/users');
       if (!res.ok) throw new Error('Failed to load users');
       setUsers(await res.json());
     } catch (error) {
@@ -67,12 +69,8 @@ function UserManagement() {
     setUsers((currentUsers) => currentUsers.map((item) => (item.id === targetUser.id ? { ...item, role: nextRole } : item)));
 
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/role`, {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/role`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
         body: JSON.stringify({ role: nextRole }),
       });
       if (!res.ok) {
@@ -92,12 +90,9 @@ function UserManagement() {
   const handleCreateResetToken = async (targetUser) => {
     setSavingUserId(targetUser.id);
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/reset-password-token`, {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/reset-password-token`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
+        });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to create reset token');
@@ -115,12 +110,9 @@ function UserManagement() {
   const handleRevokeSessions = async (targetUser) => {
     setSavingUserId(targetUser.id);
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/revoke-sessions`, {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/revoke-sessions`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
+        });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to revoke sessions');
@@ -134,13 +126,12 @@ function UserManagement() {
     }
   };
 
-  if (loading) {
-    return <TableSectionSkeleton rows={4} />;
-  }
+  if (showSkeleton) return <TableSectionSkeleton rows={4} />;
+  if (loading) return null;
 
   return (
-    <Box className="section-shell">
-      <Typography variant="h4" fontWeight="800" sx={{ mb: 1 }}>
+    <Box className="section-shell stagger">
+      <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 1 }}>
         User Management
       </Typography>
 

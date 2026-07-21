@@ -1,6 +1,10 @@
-import React, { lazy, Suspense, useState, useEffect, useMemo } from 'react';
+// Routes are imported directly rather than lazily. Each page chunk was only a few
+// kB gzipped (27 kB for all of them, against 220 kB of MUI and Recharts that load
+// regardless), but every navigation paid for it with a Suspense fallback that
+// appeared and vanished inside ~50 ms. That flicker was the 'jumping'.
+import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
+import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress, useMediaQuery } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -9,42 +13,25 @@ import './App.css';
 
 import Sidebar from './components/Sidebar';
 import MobileNav from './components/MobileNav';
+import SubscriptionBanner from './components/SubscriptionBanner';
+import AuthPage from './components/AuthPage';
+import Dashboard from './components/Dashboard';
+import Vehicles from './components/Vehicles';
+import Analytics from './components/Analytics';
+import Profile from './components/Profile';
+import Activity from './components/Activity';
+import UserManagement from './components/UserManagement';
+import PasswordRecoveryPage from './components/PasswordRecoveryPage';
+import Billing from './components/Billing';
 import { useAuth } from './context/useAuth';
 
-const AuthPage = lazy(() => import('./components/AuthPage'));
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const Vehicles = lazy(() => import('./components/Vehicles'));
-const ListChargingSessions = lazy(() => import('./components/ListChargingSessions'));
-const Analytics = lazy(() => import('./components/Analytics'));
-const Profile = lazy(() => import('./components/Profile'));
-const Expenses = lazy(() => import('./components/Expenses'));
-const Activity = lazy(() => import('./components/Activity'));
-const UserManagement = lazy(() => import('./components/UserManagement'));
-const PasswordRecoveryPage = lazy(() => import('./components/PasswordRecoveryPage'));
 
-const PageLoader = () => (
-  <Box
-    display="flex"
-    justifyContent="center"
-    alignItems="center"
-    minHeight="50vh"
-    sx={{
-      border: '1px solid',
-      borderColor: 'divider',
-      borderRadius: 3,
-      bgcolor: 'background.paper',
-      boxShadow: '0 0 24px rgba(0, 245, 255, 0.12)',
-    }}
-  >
-    <CircularProgress size={42} thickness={3} />
-  </Box>
-);
 
 const PrivateRoute = ({ children }) => {
   const { authenticated, loading } = useAuth();
 
   if (loading) {
-    return <Box display="flex" justifyContent="center" alignItems="center" height="100vh"><CircularProgress /></Box>;
+    return <Box display="flex" justifyContent="center" alignItems="center" height="100dvh"><CircularProgress /></Box>;
   }
 
   return authenticated ? children : <Navigate to="/login" replace />;
@@ -54,7 +41,7 @@ const AdminRoute = ({ children }) => {
   const { authenticated, loading, user } = useAuth();
 
   if (loading) {
-    return <Box display="flex" justifyContent="center" alignItems="center" height="100vh"><CircularProgress /></Box>;
+    return <Box display="flex" justifyContent="center" alignItems="center" height="100dvh"><CircularProgress /></Box>;
   }
 
   if (!authenticated) {
@@ -67,12 +54,16 @@ const AdminRoute = ({ children }) => {
 function App() {
   const { token, user, updateUser, loading } = useAuth();
   const [themeMode, setThemeMode] = useState('dark');
+  const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
 
   const theme = useMemo(() => {
     const darkMode = themeMode === 'dark';
-    const primaryMain = darkMode ? '#00F5FF' : '#0F8FA5';
-    const secondaryMain = darkMode ? '#FF00E5' : '#C3479F';
-    const successMain = darkMode ? '#87FF65' : '#2F8F59';
+    // Light-mode brand values are darkened so they clear WCAG AA (4.5:1) both as
+    // text on a light surface and as a button background under #F7FBFC label text.
+    // The previous values (#0F8FA5 / #C3479F / #2F8F59) sat at 3.7:1 / 4.3:1 / 4.0:1.
+    const primaryMain = darkMode ? '#00F5FF' : '#0A6F80';
+    const secondaryMain = darkMode ? '#FF00E5' : '#A32F80';
+    const successMain = darkMode ? '#87FF65' : '#277A4B';
     const backgroundDefault = darkMode ? '#070B0F' : '#EEF3F6';
     const backgroundPaper = darkMode ? 'rgba(12, 18, 24, 0.82)' : 'rgba(255, 255, 255, 0.78)';
     const lineColor = darkMode ? 'rgba(185, 214, 231, 0.12)' : 'rgba(31, 51, 64, 0.12)';
@@ -103,45 +94,58 @@ function App() {
         },
       },
       transitions: {
-        duration: {
-          shortest: 90,
-          shorter: 120,
-          short: 160,
-          standard: 180,
-          complex: 220,
-          enteringScreen: 180,
-          leavingScreen: 140,
-        },
+        // Collapse every MUI transition to ~0 when the OS asks for reduced motion.
+        // index.css carries the same rule for plain CSS; Recharts is handled per-chart
+        // via isAnimationActive, since its animation is JS-driven and ignores CSS.
+        duration: prefersReducedMotion
+          ? {
+              shortest: 0,
+              shorter: 0,
+              short: 0,
+              standard: 0,
+              complex: 0,
+              enteringScreen: 0,
+              leavingScreen: 0,
+            }
+          : {
+              shortest: 90,
+              shorter: 120,
+              short: 160,
+              standard: 180,
+              complex: 220,
+              enteringScreen: 180,
+              leavingScreen: 140,
+            },
       },
       shape: { borderRadius: 2 },
       typography: {
-        fontFamily: '"IBM Plex Sans", sans-serif',
+        fontFamily: `"IBM Plex Sans", system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`,
         h3: {
-          fontFamily: '"Rajdhani", sans-serif',
+          fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
           fontWeight: 700,
           letterSpacing: '0.04em',
           textTransform: 'uppercase',
         },
         h4: {
-          fontFamily: '"Rajdhani", sans-serif',
+          fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
           fontWeight: 700,
           letterSpacing: '0.04em',
           textTransform: 'uppercase',
         },
         h5: {
-          fontFamily: '"Rajdhani", sans-serif',
+          fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
           fontWeight: 700,
           letterSpacing: '0.03em',
           textTransform: 'uppercase',
         },
         h6: {
-          fontFamily: '"Rajdhani", sans-serif',
+          fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
           fontWeight: 700,
           letterSpacing: '0.03em',
           textTransform: 'uppercase',
         },
         button: {
-          fontFamily: '"Rajdhani", sans-serif',
+          fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
           fontWeight: 700,
           letterSpacing: '0.1em',
           textTransform: 'uppercase',
@@ -260,7 +264,7 @@ function App() {
           styleOverrides: {
             root: {
               minHeight: 44,
-              fontFamily: '"Rajdhani", sans-serif',
+              fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
               fontWeight: 700,
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
@@ -281,7 +285,7 @@ function App() {
             head: {
               borderBottomColor: lineColor,
               color: darkMode ? alpha('#EAF7FF', 0.86) : alpha(textPrimary, 0.82),
-              fontFamily: '"Rajdhani", sans-serif',
+              fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
               fontSize: '0.82rem',
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
@@ -317,7 +321,7 @@ function App() {
               },
             },
             label: {
-              fontFamily: '"Rajdhani", sans-serif',
+              fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
             },
@@ -325,7 +329,7 @@ function App() {
         },
       },
     });
-  }, [themeMode]);
+  }, [themeMode, prefersReducedMotion]);
 
   useEffect(() => {
     if (user?.theme_mode) {
@@ -355,7 +359,7 @@ function App() {
     }
   };
 
-  if (loading) return <Box display="flex" justifyContent="center" alignItems="center" height="100vh"><CircularProgress size={48} thickness={3} /></Box>;
+  if (loading) return <Box display="flex" justifyContent="center" alignItems="center" height="100dvh"><CircularProgress size={48} thickness={3} /></Box>;
 
   return (
     <ThemeProvider theme={theme}>
@@ -364,7 +368,6 @@ function App() {
         <Toaster position="top-center" richColors theme={themeMode} />
         <Box className="app-shell">
           <BrowserRouter>
-            <Suspense fallback={<PageLoader />}>
               <Routes>
                 <Route path="/login" element={<AuthPage mode="login" />} />
                 <Route path="/register" element={<AuthPage mode="register" />} />
@@ -372,27 +375,35 @@ function App() {
                 <Route path="/reset-password" element={<PasswordRecoveryPage mode="reset" />} />
                 <Route path="/*" element={
                   <PrivateRoute>
-                    <Box sx={{ display: 'flex', minHeight: '100vh', flexDirection: { xs: 'column', sm: 'row' } }}>
+                    <Box sx={{ display: 'flex', minHeight: '100dvh', flexDirection: { xs: 'column', sm: 'row' } }}>
+                      <Box component="a" href="#main-content" className="skip-link">
+                        Skip to main content
+                      </Box>
                       <Sidebar toggleTheme={toggleTheme} themeMode={themeMode} />
                       <Box
                         component="main"
+                        id="main-content"
+                        tabIndex={-1}
                         className="industrial-main"
                         sx={{
                           flexGrow: 1,
                           p: { xs: 2, sm: 3 },
-                          pb: { xs: 11, sm: 4 },
+                          // Bottom padding clears the fixed MobileNav (72px) plus the
+                          // iOS home indicator, which the safe-area inset resolves to 0 on
+                          // devices and browsers that do not have one.
+                          pb: { xs: 'calc(88px + env(safe-area-inset-bottom))', sm: 4 },
                           width: '100%',
                         }}
                       >
                         <Box sx={{ width: '100%', maxWidth: '1320px', mx: 'auto' }}>
+                          <SubscriptionBanner />
                           <Routes>
                             <Route path="/" element={<Dashboard />} />
                             <Route path="/vehicles" element={<Vehicles />} />
                             <Route path="/activity" element={<Activity />} />
-                            <Route path="/sessions" element={<ListChargingSessions />} />
-                            <Route path="/expenses" element={<Expenses />} />
                             <Route path="/analytics" element={<Analytics />} />
                             <Route path="/account" element={<Profile />} />
+                            <Route path="/billing" element={<Billing />} />
                             <Route path="/admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
                           </Routes>
                         </Box>
@@ -402,7 +413,6 @@ function App() {
                   </PrivateRoute>
                 } />
               </Routes>
-            </Suspense>
           </BrowserRouter>
         </Box>
       </LocalizationProvider>

@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Rajdhani:wght@500;600;700&display=swap');
-
 :root {
   color-scheme: dark;
   --garageos-bg: #070b0f;
@@ -37,13 +35,16 @@
 html {
   min-height: 100%;
   background: var(--garageos-bg);
+  /* Always reserve the scrollbar. The main column is centred with a max width, so a
+     scrollbar appearing as content grows shifts the whole page sideways. */
+  scrollbar-gutter: stable;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100dvh;
   color: var(--garageos-text);
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--garageos-bg);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -58,8 +59,51 @@ a {
   color: inherit;
 }
 
+/* Visible only once focused, so keyboard users can jump past the sidebar. */
+.skip-link {
+  position: fixed;
+  left: 0.75rem;
+  top: -6rem;
+  z-index: 2000;
+  padding: 0.7rem 1.1rem;
+  border: 1px solid var(--garageos-cyan);
+  border-radius: 6px;
+  background: var(--garageos-panel-strong);
+  color: var(--garageos-text);
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+/* position: fixed resolves against the viewport, so this must add the inset
+   itself — the padding on body does not apply to it. */
+.skip-link:focus-visible {
+  top: calc(0.75rem + env(safe-area-inset-top));
+}
+
+/* The status bar is translucent in standalone PWA mode (see index.html), so the
+   app would otherwise render underneath the notch and the home indicator. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 #root {
-  min-height: 100vh;
+  min-height: 100dvh;
   max-width: 100%;
   margin: 0 auto;
   padding: 0;

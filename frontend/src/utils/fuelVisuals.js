@@ -1,29 +1,35 @@
 import { alpha } from '@mui/material/styles';
 
+// `text` is tuned for dark surfaces (~10:1 there) but drops to ~1.0:1 on the light
+// tinted chip background, so `textLight` carries a darkened version of the same hue.
 const FUEL_VISUALS = {
   electric: {
     primary: '#87FF65',
     secondary: '#2FFFA8',
     border: '#65C86B',
     text: '#D8FFD2',
+    textLight: '#1C7E00',
   },
   hybrid: {
     primary: '#58C7FF',
     secondary: '#8A7DFF',
     border: '#58AFFF',
     text: '#DDF5FF',
+    textLight: '#0071AA',
   },
   petrol: {
     primary: '#FFB547',
     secondary: '#8B5A2B',
     border: '#C7922C',
     text: '#FFF0CF',
+    textLight: '#995B00',
   },
   diesel: {
     primary: '#E4A64C',
     secondary: '#6F4F2F',
     border: '#B9832A',
     text: '#FBEACC',
+    textLight: '#915E16',
   },
 };
 
@@ -35,8 +41,8 @@ export function getFuelChipSx(theme, fuelType) {
   const visual = getFuelVisual(fuelType);
 
   return {
-    color: visual.text,
-    borderColor: alpha(visual.border, 0.78),
+    color: theme.palette.mode === 'dark' ? visual.text : visual.textLight,
+    borderColor: alpha(visual.border, theme.palette.mode === 'dark' ? 0.78 : 0.9),
     background: `linear-gradient(135deg, ${alpha(visual.primary, 0.22)}, ${alpha(visual.secondary, 0.14)})`,
     boxShadow: `0 0 12px ${alpha(visual.border, 0.18)}`,
     '& .MuiChip-icon': {
