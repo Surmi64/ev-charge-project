@@ -16,18 +16,11 @@ const MobileNav = () => {
   const theme = useTheme();
   const darkMode = theme.palette.mode === 'dark';
 
+  // Same five destinations as the sidebar, in the same order.
+  const PATHS = ['/', '/activity', '/vehicles', '/analytics', '/account'];
   const getActiveTab = () => {
-    switch (location.pathname) {
-      case '/': return 0;
-      case '/vehicles': return 1;
-      case '/activity':
-      case '/sessions':
-      case '/expenses':
-        return 2;
-      case '/analytics': return 3;
-      case '/account': return 4;
-      default: return 0;
-    }
+    const index = PATHS.indexOf(location.pathname);
+    return index === -1 ? 0 : index;
   };
 
   return (
@@ -41,6 +34,9 @@ const MobileNav = () => {
         zIndex: 1000,
         borderRadius: '8px 8px 0 0',
         overflow: 'hidden',
+        // Lift the bar above the iOS home indicator. Resolves to 0 where there
+        // is no inset, so this is a no-op on Android and desktop.
+        pb: 'env(safe-area-inset-bottom)',
         borderTop: '1px solid',
         borderColor: darkMode ? alpha(theme.palette.primary.main, 0.28) : alpha('#0f1a22', 0.14),
         background: darkMode
@@ -56,16 +52,13 @@ const MobileNav = () => {
       <BottomNavigation
         showLabels
         value={getActiveTab()}
-        onChange={(event, newValue) => {
-          const paths = ['/', '/vehicles', '/activity', '/analytics', '/account'];
-          navigate(paths[newValue]);
-        }}
+        onChange={(event, newValue) => navigate(PATHS[newValue])}
         sx={{ height: 72 }}
       >
-        <BottomNavigationAction label="Dash" icon={<DashIcon />} />
-        <BottomNavigationAction label="Cars" icon={<CarIcon />} />
-        <BottomNavigationAction label="Activity" icon={<ActivityIcon />} />
-        <BottomNavigationAction label="Stats" icon={<AnalyticsIcon />} />
+        <BottomNavigationAction label="Home" icon={<DashIcon />} />
+        <BottomNavigationAction label="Records" icon={<ActivityIcon />} />
+        <BottomNavigationAction label="Vehicles" icon={<CarIcon />} />
+        <BottomNavigationAction label="Analytics" icon={<AnalyticsIcon />} />
         <BottomNavigationAction label="Account" icon={<PersonIcon />} />
       </BottomNavigation>
     </Paper>

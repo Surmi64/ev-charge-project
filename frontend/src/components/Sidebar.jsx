@@ -18,6 +18,7 @@ import {
   EvStation as ChargeIcon, 
   BarChart as AnalyticsIcon,
   Person as PersonIcon,
+  CreditCard as BillingIcon,
   AdminPanelSettings as AdminIcon,
   Logout as LogoutIcon,
   Brightness4 as DarkIcon,
@@ -32,29 +33,24 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
   const { logout, user } = useAuth();
   const theme = useTheme();
 
+  // Primary destinations, deliberately five so the mobile bar can mirror them.
   const menuItems = [
     { text: 'Dashboard', icon: <DashIcon />, path: '/' },
+    { text: 'Records', icon: <ActivityIcon />, path: '/activity' },
     { text: 'Vehicles', icon: <CarIcon />, path: '/vehicles' },
-    { text: 'Activity', icon: <ActivityIcon />, path: '/activity' },
     { text: 'Analytics', icon: <AnalyticsIcon />, path: '/analytics' },
     { text: 'Account', icon: <PersonIcon />, path: '/account' },
   ];
 
+  const settingsItems = [
+    { text: 'Subscription', icon: <BillingIcon />, path: '/billing' },
+  ];
+
   if (user?.role === 'admin') {
-    menuItems.push({ text: 'User Management', icon: <AdminIcon />, path: '/admin/users' });
+    settingsItems.push({ text: 'Users', icon: <AdminIcon />, path: '/admin/users' });
   }
 
-  const isMenuItemSelected = (path) => {
-    if (path === '/activity') {
-      return ['/activity', '/sessions', '/expenses'].includes(location.pathname);
-    }
-
-    if (path === '/admin/users') {
-      return location.pathname === '/admin/users';
-    }
-
-    return location.pathname === path;
-  };
+  const isMenuItemSelected = (path) => location.pathname === path;
 
   const handleLogout = () => {
     logout();
@@ -136,7 +132,23 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
       </Box>
 
       <Card variant="outlined" sx={{ p: 1.2, borderRadius: 4, bgcolor: 'background.paper' }}>
-        <Typography className="industrial-kicker" sx={{ px: 1.2, pt: 0.5 }}>System</Typography>
+        <Typography className="industrial-kicker" sx={{ px: 1.2, pt: 0.5 }}>Settings</Typography>
+        <List disablePadding>
+          {settingsItems.map((item) => (
+            <ListItem key={item.text} disablePadding>
+              <ListItemButton
+                onClick={() => navigate(item.path)}
+                selected={isMenuItemSelected(item.path)}
+                sx={{ borderRadius: 1, py: 1.1 }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItemButton>
+            </ListItem>
+          ))}
+        </List>
+
+        <Typography className="industrial-kicker" sx={{ px: 1.2, pt: 1.5 }}>System</Typography>
         <List disablePadding>
           <ListItem disablePadding>
             <ListItemButton onClick={toggleTheme} sx={{ borderRadius: 1, py: 1.1 }}>
