@@ -5,48 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from backend.auth_utils import get_current_user_id
-    from backend.db import get_db, table_exists
+    from backend.billing import get_tenant_db, require_write_access
+    from backend.db import table_exists
     from backend.schemas import ExpenseCreate, ExpenseUpdate, RecurringExpenseCreate, RecurringExpenseLogRequest, RecurringExpenseUpdate
     from backend.vehicle_rules import validate_vehicle_reference
     from backend.vehicle_events import delete_vehicle_event_by_legacy, sync_expense_to_vehicle_event
 except ModuleNotFoundError:
     from auth_utils import get_current_user_id
-    from db import get_db, table_exists
+    from billing import get_tenant_db, require_write_access
+    from db import table_exists
     from schemas import ExpenseCreate, ExpenseUpdate, RecurringExpenseCreate, RecurringExpenseLogRequest, RecurringExpenseUpdate
     from vehicle_rules import validate_vehicle_reference
     from vehicle_events import delete_vehicle_event_by_legacy, sync_expense_to_vehicle_event
 
 router = APIRouter(tags=['expenses'])
 RECURRING_FREQUENCIES = {'monthly': 1, 'quarterly': 3, 'yearly': 12}
-
-
-def ensure_recurring_expense_table(db):
-    if table_exists(db, 'recurring_expense_reminders'):
-        return
-
-    cur = db.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS recurring_expense_reminders (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            vehicle_id BIGINT REFERENCES vehicles(id) ON DELETE SET NULL,
-            category VARCHAR(50) NOT NULL,
-            amount NUMERIC(12,2) NOT NULL,
-            currency VARCHAR(10) NOT NULL DEFAULT 'HUF',
-            frequency VARCHAR(20) NOT NULL CHECK (frequency IN ('monthly', 'quarterly', 'yearly')),
-            next_due_date DATE NOT NULL,
-            description TEXT,
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            last_logged_date DATE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT recurring_expense_amount_chk CHECK (amount >= 0)
-        );
-        """
-    )
-    cur.execute('CREATE INDEX IF NOT EXISTS recurring_expense_user_due_idx ON recurring_expense_reminders (user_id, is_active, next_due_date ASC);')
-    db.commit()
 
 
 def normalize_frequency(value: str | None) -> str:
@@ -113,15 +86,14 @@ def serialize_reminder(reminder: dict) -> dict:
 
 
 @router.get('/expenses', response_model=list[dict])
-def get_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def get_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute('SELECT * FROM expenses WHERE user_id = %s ORDER BY date DESC;', (user_id,))
     return cur.fetchall()
 
 
 @router.get('/recurring-expenses', response_model=list[dict])
-def get_recurring_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_recurring_expense_table(db)
+def get_recurring_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute(
         """
@@ -136,7 +108,7 @@ def get_recurring_expenses(user_id: str = Depends(get_current_user_id), db=Depen
 
 
 @router.post('/expenses', status_code=201)
-def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         if expense.vehicle_id is not None:
@@ -150,14 +122,16 @@ def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_current_us
         sync_expense_to_vehicle_event(db, expense_id)
         db.commit()
         return {'message': 'Expense created', 'expense_id': expense_id}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post('/recurring-expenses', status_code=201)
-def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_recurring_expense_table(db)
+def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         payload = validate_recurring_payload(reminder.model_dump())
@@ -197,7 +171,7 @@ def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = De
 
 
 @router.patch('/expenses/{expense_id}')
-def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute('SELECT id, vehicle_id FROM expenses WHERE id = %s AND user_id = %s;', (expense_id, user_id))
     existing_expense = cur.fetchone()
@@ -236,8 +210,7 @@ def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depen
 
 
 @router.patch('/recurring-expenses/{reminder_id}')
-def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_recurring_expense_table(db)
+def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute('SELECT id, vehicle_id FROM recurring_expense_reminders WHERE id = %s AND user_id = %s;', (reminder_id, user_id))
     existing = cur.fetchone()
@@ -282,8 +255,7 @@ def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate,
 
 
 @router.post('/recurring-expenses/{reminder_id}/log-expense', status_code=201)
-def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_recurring_expense_table(db)
+def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute(
         'SELECT * FROM recurring_expense_reminders WHERE id = %s AND user_id = %s AND is_active = TRUE;',
@@ -332,7 +304,7 @@ def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest,
 
 
 @router.delete('/expenses/{expense_id}')
-def delete_expense(expense_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def delete_expense(expense_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM expenses WHERE id = %s AND user_id = %s;', (expense_id, user_id))
@@ -350,8 +322,7 @@ def delete_expense(expense_id: int, user_id: str = Depends(get_current_user_id),
 
 
 @router.delete('/recurring-expenses/{reminder_id}')
-def delete_recurring_expense(reminder_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
-    ensure_recurring_expense_table(db)
+def delete_recurring_expense(reminder_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM recurring_expense_reminders WHERE id = %s AND user_id = %s;', (reminder_id, user_id))

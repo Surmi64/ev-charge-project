@@ -2,13 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from backend.auth_utils import get_current_user_id
-    from backend.db import get_db, get_vehicle_column
+    from backend.billing import get_tenant_db, require_write_access
+    from backend.db import get_vehicle_column
     from backend.schemas import ChargingSessionCreate
     from backend.vehicle_events import delete_vehicle_event_by_legacy, sync_session_to_vehicle_event
     from backend.vehicle_rules import validate_session_for_vehicle
 except ModuleNotFoundError:
     from auth_utils import get_current_user_id
-    from db import get_db, get_vehicle_column
+    from billing import get_tenant_db, require_write_access
+    from db import get_vehicle_column
     from schemas import ChargingSessionCreate
     from vehicle_events import delete_vehicle_event_by_legacy, sync_session_to_vehicle_event
     from vehicle_rules import validate_session_for_vehicle
@@ -17,7 +19,7 @@ router = APIRouter(tags=['sessions'])
 
 
 @router.get('/charging_sessions', response_model=list[dict])
-def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     cur.execute(
@@ -47,7 +49,7 @@ def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depend
 
 
 @router.patch('/charging_sessions/{session_id}')
-def update_charging_session(session_id: str, session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def update_charging_session(session_id: str, session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     try:
@@ -56,6 +58,14 @@ def update_charging_session(session_id: str, session: ChargingSessionCreate, use
         if not existing_session:
             raise HTTPException(status_code=404, detail='Charging session not found')
 
+        # Editing a session already attached to an archived vehicle stays allowed as long
+        # as the vehicle is unchanged. Mirrors the None guard in expenses.update_expense:
+        # the column is NOT NULL today, but the cast must not be the thing keeping it safe.
+        existing_vehicle_id = existing_session['vehicle_id']
+        keeps_same_vehicle = (
+            existing_vehicle_id is not None and int(existing_vehicle_id) == int(session.vehicle_id)
+        )
+
         validate_session_for_vehicle(
             db,
             user_id,
@@ -63,7 +73,7 @@ def update_charging_session(session_id: str, session: ChargingSessionCreate, use
             session.session_type,
             session.kwh,
             session.fuel_liters,
-            allow_archived=int(existing_session['vehicle_id']) == int(session.vehicle_id),
+            allow_archived=keeps_same_vehicle,
         )
 
         cur.execute(
@@ -91,7 +101,7 @@ def update_charging_session(session_id: str, session: ChargingSessionCreate, use
 
 
 @router.post('/charging_sessions', status_code=201)
-def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     try:
@@ -125,7 +135,7 @@ def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(
 
 
 @router.delete('/charging_sessions/{session_id}')
-def delete_charging_session(session_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def delete_charging_session(session_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM charging_sessions WHERE id = %s AND user_id = %s;', (session_id, user_id))

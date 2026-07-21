@@ -6,7 +6,9 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose-dev.yaml"
 STAMP="$(date +%s)"
 EMAIL="smoketest-${STAMP}@example.com"
 USERNAME="smoketest-${STAMP}"
-PASSWORD="test1234"
+# Must satisfy validate_password_strength in backend/auth_utils.py:
+# at least 8 chars with an uppercase letter, a lowercase letter and a digit.
+PASSWORD="Test1234"
 
 echo "[1/6] Checking service status"
 docker compose -f "$COMPOSE_FILE" ps

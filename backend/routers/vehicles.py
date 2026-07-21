@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from backend.auth_utils import get_current_user_id
-    from backend.db import column_exists, get_db, get_vehicle_column
+    from backend.billing import get_tenant_db, require_write_access
+    from backend.db import column_exists, get_vehicle_column
     from backend.schemas import VehicleCreate, VehicleUpdate
     from backend.vehicle_rules import normalize_vehicle_payload
 except ModuleNotFoundError:
     from auth_utils import get_current_user_id
-    from db import column_exists, get_db, get_vehicle_column
+    from billing import get_tenant_db, require_write_access
+    from db import column_exists, get_vehicle_column
     from schemas import VehicleCreate, VehicleUpdate
     from vehicle_rules import normalize_vehicle_payload
 
@@ -59,7 +61,7 @@ def ensure_active_default_vehicle(cur, db, user_id: str):
 def get_vehicles(
     include_archived: bool = Query(False),
     user_id: str = Depends(get_current_user_id),
-    db=Depends(get_db),
+    db=Depends(get_tenant_db),
 ):
     cur = db.cursor()
     if has_archive_support(db):
@@ -79,7 +81,7 @@ def get_vehicles(
 
 
 @router.post('/vehicles', status_code=201)
-def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         payload = normalize_vehicle_payload(vehicle)
@@ -116,13 +118,16 @@ def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_us
         vehicle_id = cur.fetchone()['id']
         db.commit()
         return {'message': 'Vehicle created', 'vehicle_id': vehicle_id}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.patch('/vehicles/{vehicle_id}')
-def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     select_fields = 'id, is_default, is_archived' if has_archive_support(db) else 'id, is_default'
     cur.execute(f'SELECT {select_fields} FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
@@ -166,7 +171,7 @@ def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depen
 
 
 @router.delete('/vehicles/{vehicle_id}')
-def delete_vehicle(vehicle_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+def delete_vehicle(vehicle_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     select_fields = 'id, is_default, is_archived' if has_archive_support(db) else 'id, is_default'
     cur.execute(f'SELECT {select_fields} FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
