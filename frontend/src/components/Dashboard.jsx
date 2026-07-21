@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Card,
   Chip,
   Divider,
-  Grid,
+  IconButton,
+  LinearProgress,
   Stack,
   Typography,
   useMediaQuery,
@@ -16,594 +18,425 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import {
+  Add as AddIcon,
+  ArrowDownward as DownIcon,
+  ArrowUpward as UpIcon,
+  ChevronRight as ChevronIcon,
+  Close as CloseIcon,
+  Visibility as VisibilityIcon,
+} from '@mui/icons-material';
+import { useAuth } from '../context/useAuth';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { apiFetch } from '../utils/api';
+import { useDelayedLoading } from '../utils/useDelayedLoading';
+import { getCategoryChipSx } from '../utils/categoryVisuals';
+import { formatCategoryLabel } from '../utils/expenseCategories';
 import { DashboardSkeleton } from './SectionSkeletons';
-import { getCategoryBoxSx } from '../utils/categoryVisuals';
-import { getFuelBoxSx } from '../utils/fuelVisuals';
+import RecordDialog from './RecordDialog';
 
-const formatNumber = (value) => Number(value || 0).toLocaleString();
+const huf = (value) => `${Math.round(Number(value || 0)).toLocaleString()} HUF`;
+// Axis labels reach seven digits on real data, which crowds out the plot area.
+const compact = (value) =>
+  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0));
 
-const getAlertTone = (theme, level) => {
-  if (level === 'warning') {
-    return {
-      color: theme.palette.warning.main,
-      borderColor: alpha(theme.palette.warning.main, 0.48),
-      backgroundColor: alpha(theme.palette.warning.main, theme.palette.mode === 'dark' ? 0.12 : 0.16),
-    };
-  }
-
-  if (level === 'success') {
-    return {
-      color: theme.palette.success.main,
-      borderColor: alpha(theme.palette.success.main, 0.4),
-      backgroundColor: alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.12 : 0.16),
-    };
-  }
-
-  return {
-    color: theme.palette.info.main,
-    borderColor: alpha(theme.palette.info.main, 0.42),
-    backgroundColor: alpha(theme.palette.info.main, theme.palette.mode === 'dark' ? 0.12 : 0.16),
-  };
+const monthLabel = (value) => {
+  if (!value) return '';
+  const [year, month] = value.split('-');
+  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString(undefined, { month: 'short' });
 };
 
-const getDeltaMeta = (current, previous, preference = 'lower') => {
-  const delta = Number(current || 0) - Number(previous || 0);
-
-  if (previous <= 0) {
-    if (current > 0) {
-      return {
-        label: 'New activity vs last month',
-        tone: 'neutral',
-      };
-    }
-
-    return {
-      label: 'No change',
-      tone: 'neutral',
-    };
-  }
-
-  const pct = Math.round((delta / previous) * 100);
-  const improved = preference === 'lower' ? delta <= 0 : delta >= 0;
-
-  return {
-    label: `${pct > 0 ? '+' : ''}${pct}% vs last month`,
-    tone: improved ? 'good' : 'bad',
-  };
+/** Percentage change, framed so "good" depends on the metric. */
+const getDelta = (current, previous, preference = 'lower') => {
+  const now = Number(current || 0);
+  const before = Number(previous || 0);
+  if (before <= 0) return null;
+  const percent = Math.round(((now - before) / before) * 100);
+  if (percent === 0) return { percent: 0, tone: 'neutral' };
+  const improved = preference === 'lower' ? percent < 0 : percent > 0;
+  return { percent, tone: improved ? 'good' : 'bad' };
 };
 
-const Dashboard = () => {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState('');
+const DeltaChip = ({ delta }) => {
   const theme = useTheme();
+  if (!delta) return null;
+  const color =
+    delta.tone === 'good' ? theme.palette.success.main
+      : delta.tone === 'bad' ? theme.palette.error.main
+        : theme.palette.text.secondary;
+  const Icon = delta.percent > 0 ? UpIcon : DownIcon;
+  return (
+    <Stack direction="row" spacing={0.25} alignItems="center">
+      {delta.percent !== 0 ? <Icon sx={{ fontSize: 16, color }} /> : null}
+      <Typography variant="body2" fontWeight={700} sx={{ color }}>
+        {Math.abs(delta.percent)}%
+      </Typography>
+      <Typography variant="body2" color="text.secondary">vs last month</Typography>
+    </Stack>
+  );
+};
+
+// Every alert used to send you to the ledger, including the ones about recurring
+// costs and vehicles, which are not on that tab. The id prefix says what the alert
+// is about, so route on that.
+const ALERT_TARGETS = {
+  'overdue-reminders': { to: '/activity?tab=recurring', label: 'Review' },
+  'inactive-vehicles': { to: '/vehicles', label: 'Vehicles' },
+  'cost-increase': { to: '/analytics', label: 'Analyse' },
+};
+
+const getAlertTarget = (alert) => ALERT_TARGETS[String(alert.id || '').split(':')[0]] || null;
+
+const SectionTitle = ({ children, action }) => (
+  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+    <Typography variant="h6" fontWeight={700}>{children}</Typography>
+    {action}
+  </Stack>
+);
+
+/**
+ * What needs attention, what the month cost, what just happened — in that order.
+ *
+ * The previous layout led with six KPI cards, two of which ("This Month Cost" and
+ * "Operating Cost") rendered the very same number under different labels. The month
+ * now has one headline figure with the detail underneath it.
+ */
+const Dashboard = () => {
+  const theme = useTheme();
+  const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const chartAnimation = !useMediaQuery('(prefers-reduced-motion: reduce)');
 
-  useEffect(() => {
-    const fetchStats = async (attempt = 0) => {
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error('Authentication token missing. Please sign in again.');
-        }
+  const { user, updateUser } = useAuth();
+  const [stats, setStats] = useState(null);
+  const [vehicles, setVehicles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  // Skip the placeholder entirely when the data beats the delay.
+  const showSkeleton = useDelayedLoading(loading);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
 
-        const res = await fetch('/api/dashboard/stats', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+  const dismissed = useMemo(() => user?.dismissed_alerts || [], [user]);
 
-        if (!res.ok) {
-          let detail = 'Failed to load dashboard statistics';
+  // Persisted on the account, not in localStorage, so the choice follows the user to
+  // another device. The list is pruned to ids that still exist, which stops it from
+  // growing every month.
+  const persistDismissed = useCallback(async (nextList) => {
+    updateUser({ dismissed_alerts: nextList });
+    const res = await apiFetch('/api/auth/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ dismissed_alerts: nextList }),
+    });
+    if (!res.ok) {
+      updateUser({ dismissed_alerts: dismissed });
+      toast.error('Could not save that. The alert will be back on refresh.');
+    }
+  }, [dismissed, updateUser]);
 
-          try {
-            const payload = await res.json();
-            if (payload?.detail) {
-              detail = payload.detail;
-            }
-          } catch {
-            // Ignore JSON parsing errors and use fallback message.
-          }
-
-          throw new Error(detail);
-        }
-
-        const payload = await res.json();
-        if (!payload || typeof payload !== 'object') {
-          throw new Error('Dashboard returned an empty response.');
-        }
-
-        setStats(payload);
-        setErrorMessage('');
-      } catch (error) {
-        if (attempt < 1) {
-          window.setTimeout(() => {
-            fetchStats(attempt + 1);
-          }, 700);
-          return;
-        }
-
-        const message = error instanceof Error ? error.message : 'Failed to load dashboard statistics';
-        setErrorMessage(message);
-        toast.error(message);
-      } finally {
-        setLoading(false);
+  const load = useCallback(async () => {
+    try {
+      const [statsRes, vehiclesRes] = await Promise.all([
+        apiFetch('/api/dashboard/stats'),
+        apiFetch('/api/vehicles'),
+      ]);
+      if (!statsRes.ok) {
+        const payload = await statsRes.json().catch(() => null);
+        throw new Error(payload?.detail || 'Could not load the dashboard');
       }
-    };
-
-    fetchStats();
+      setStats(await statsRes.json());
+      if (vehiclesRes.ok) setVehicles(await vehiclesRes.json());
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(error.message);
+      toast.error(error.message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (loading) return <DashboardSkeleton />;
+  useEffect(() => { load(); }, [load]);
+
+  if (showSkeleton) return <DashboardSkeleton />;
+  if (loading) return null;
+
   if (!stats) {
     return (
-      <Box className="section-shell" sx={{ maxWidth: 760, mx: 'auto' }}>
-        <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: { xs: 3, sm: 3.5 }, borderRadius: 4 }}>
-          <Stack spacing={1.25} alignItems="flex-start">
-            <Chip size="small" label="Status" variant="outlined" />
-            <Typography variant="h6" fontWeight="700">
-              Dashboard data unavailable
-            </Typography>
-            <Typography color="text.secondary">
-              {errorMessage || 'The dashboard did not return usable data.'}
-            </Typography>
-            <Button
-              variant="contained"
-              onClick={() => {
-                setLoading(true);
-                setErrorMessage('');
-                setStats(null);
-                const token = localStorage.getItem('token');
-                fetch('/api/dashboard/stats', {
-                  headers: token ? { Authorization: `Bearer ${token}` } : {},
-                })
-                  .then(async (res) => {
-                    if (!res.ok) {
-                      const payload = await res.json().catch(() => null);
-                      throw new Error(payload?.detail || 'Failed to load dashboard statistics');
-                    }
-                    return res.json();
-                  })
-                  .then((payload) => {
-                    setStats(payload);
-                  })
-                  .catch((error) => {
-                    const message = error instanceof Error ? error.message : 'Failed to load dashboard statistics';
-                    setErrorMessage(message);
-                    toast.error(message);
-                  })
-                  .finally(() => {
-                    setLoading(false);
-                  });
-              }}
-            >
-              Retry
-            </Button>
-          </Stack>
+      <Box className="section-shell stagger" sx={{ maxWidth: 620, mx: 'auto' }}>
+        <Card sx={{ p: 3.5, borderRadius: 4, textAlign: 'center' }}>
+          <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Dashboard unavailable</Typography>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>{errorMessage}</Typography>
+          <Button variant="contained" onClick={() => { setLoading(true); load(); }}>Try again</Button>
         </Card>
       </Box>
     );
   }
 
-  const currentMonth = stats.current_month || {};
-  const previousMonth = stats.previous_month || {};
-  const comparisonCards = [
-    {
-      title: 'Operating Cost',
-      current: currentMonth.total_cost_huf,
-      previous: previousMonth.total_cost_huf,
-      unit: 'HUF',
-      preference: 'lower',
-    },
-    {
-      title: 'Tracked Distance',
-      current: currentMonth.total_distance_km,
-      previous: previousMonth.total_distance_km,
-      unit: 'km',
-      preference: 'higher',
-    },
-    {
-      title: 'Cost per 100 km',
-      current: currentMonth.avg_cost_per_100km,
-      previous: previousMonth.avg_cost_per_100km,
-      unit: 'HUF',
-      preference: 'lower',
-    },
+  const current = stats.current_month || {};
+  const previous = stats.previous_month || {};
+  const alerts = stats.alerts || [];
+  const alertIds = alerts.map((alert) => alert.id).filter(Boolean);
+  const visibleAlerts = alerts.filter((alert) => !alert.id || !dismissed.includes(alert.id));
+  const hiddenCount = alerts.length - visibleAlerts.length;
+
+  // Keep only ids that are still live, so last month's dismissals fall out.
+  const dismissAlert = (alert) => {
+    if (!alert.id) return;
+    persistDismissed([...dismissed.filter((id) => alertIds.includes(id)), alert.id]);
+  };
+
+  const restoreAlerts = () => {
+    persistDismissed(dismissed.filter((id) => !alertIds.includes(id)));
+  };
+  const reminders = stats.upcoming_reminders || [];
+  const recent = stats.recent_activity || [];
+  const fleet = stats.vehicle_stats || [];
+
+  if ((stats.total_records || 0) === 0) {
+    return (
+      <Box className="section-shell stagger">
+        <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 0.5 }}>Dashboard</Typography>
+        <Card sx={{ p: 4, borderRadius: 4, textAlign: 'center', maxWidth: 620, mx: 'auto', mt: 3 }}>
+          <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Nothing logged yet</Typography>
+          <Typography color="text.secondary" sx={{ mb: 2.5 }}>
+            {vehicles.length === 0
+              ? 'Start by adding a vehicle, then log your first charge, tank of fuel or cost.'
+              : 'Log your first charge, tank of fuel or cost and this page fills in.'}
+          </Typography>
+          {vehicles.length === 0 ? (
+            <Button variant="contained" onClick={() => navigate('/vehicles')}>Add a vehicle</Button>
+          ) : (
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>Add record</Button>
+          )}
+        </Card>
+        <RecordDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={load} vehicles={vehicles} editing={null} />
+      </Box>
+    );
+  }
+
+  const costDelta = getDelta(current.total_cost_huf, previous.total_cost_huf, 'lower');
+  const supporting = [
+    { label: 'Driving spend', value: huf(current.session_cost_huf), hint: `${current.session_count || 0} sessions`, color: theme.palette.primary.main },
+    { label: 'Other costs', value: huf(current.expense_cost_huf), hint: `${current.expense_count || 0} entries`, color: theme.palette.secondary.main },
+    { label: 'Cost per 100 km', value: huf(current.avg_cost_per_100km), hint: `${Math.round(current.total_distance_km || 0).toLocaleString()} km tracked`, color: theme.palette.warning.main },
   ];
-  const summaryRows = [
-    [
-      {
-        kind: 'kpi',
-        title: 'This Month Cost',
-        value: currentMonth.total_cost_huf,
-        unit: 'HUF',
-        description: 'Combined session, fueling, charging, and extra expenses.',
-        color: 'secondary.main',
-      },
-      {
-        kind: 'kpi',
-        title: 'Driving Spend',
-        value: currentMonth.session_cost_huf,
-        unit: 'HUF',
-        description: 'Charging and fueling related spend for the current month.',
-        color: 'primary.main',
-      },
-      {
-        kind: 'kpi',
-        title: 'Extra Costs',
-        value: currentMonth.expense_cost_huf,
-        unit: 'HUF',
-        description: 'Maintenance, insurance, tax, and other non-session costs.',
-        color: 'warning.main',
-      },
-    ],
-    comparisonCards.map((item) => ({ kind: 'comparison', ...item })),
-  ];
+
   const tooltipStyle = {
-    borderRadius: '16px',
+    borderRadius: 12,
     backgroundColor: theme.palette.background.paper,
     border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
-    boxShadow: theme.palette.mode === 'dark'
-      ? `0 18px 40px ${alpha('#000000', 0.32)}`
-      : '0 14px 30px rgba(20, 31, 41, 0.12)',
-    backdropFilter: 'blur(14px)',
   };
-  const summaryCardSx = {
-    p: 3,
-    borderRadius: 4,
-    width: '100%',
-    minWidth: 0,
-    height: '100%',
-    ...getCategoryBoxSx(theme, 'other'),
-    borderColor: alpha(theme.palette.secondary.main, 0.72),
-    boxShadow: `0 0 0 1px ${alpha(theme.palette.secondary.main, 0.14)} inset, 0 0 18px ${alpha(theme.palette.secondary.main, 0.12)}`,
-  };
-  const gridItemSx = {
-    display: 'flex',
-    minWidth: 0,
-  };
-  const fixedCardSx = {
-    width: '100%',
-    minWidth: 0,
-    height: '100%',
-  };
-  const summaryRowSx = {
-    display: 'flex',
-    gap: 3,
-    flexWrap: 'wrap',
-    mb: 3,
-  };
-  const summaryRowItemSx = {
-    width: {
-      xs: '100%',
-      md: 'calc((100% - 48px) / 3)',
-    },
-    minWidth: 0,
-    display: 'flex',
-  };
-  const wideDashboardRowSx = {
-    display: 'flex',
-    gap: 3,
-    flexWrap: 'wrap',
-    mb: 0.5,
-  };
-  const wideDashboardPrimaryItemSx = {
-    width: {
-      xs: '100%',
-      md: 'calc((((100% - 48px) / 3) * 2) + 24px)',
-    },
-    minWidth: 0,
-    display: 'flex',
-  };
-  const wideDashboardSecondaryItemSx = {
-    width: {
-      xs: '100%',
-      md: 'calc((100% - 48px) / 3)',
-    },
-    minWidth: 0,
-    display: 'flex',
-  };
-  const emptyDashboardSlotSx = {
-    width: {
-      xs: '100%',
-      md: 'calc((100% - 48px) / 3)',
-    },
-    minWidth: 0,
-    display: {
-      xs: 'none',
-      md: 'block',
-    },
-  };
-  const compositionItems = [
-    {
-      label: 'Driving spend',
-      value: currentMonth.session_cost_huf || 0,
-      color: theme.palette.primary.main,
-    },
-    {
-      label: 'Extra costs',
-      value: currentMonth.expense_cost_huf || 0,
-      color: theme.palette.secondary.main,
-    },
-  ];
-  const compositionTotal = compositionItems.reduce((sum, item) => sum + item.value, 0);
 
-
-  const KPIStatCard = ({ title, value, unit, description, color = 'secondary.main' }) => (
-    <Card sx={summaryCardSx}>
-      <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-        {title}
-      </Typography>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1, minWidth: 0, flexWrap: 'wrap' }}>
-        <Typography variant="h4" fontWeight="800" sx={{ color, minWidth: 0, overflowWrap: 'anywhere' }}>
-          {formatNumber(value)}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {unit}
-        </Typography>
-      </Box>
-      <Typography variant="body2" color="text.secondary">
-        {description}
-      </Typography>
-    </Card>
-  );
-
-  const ComparisonCard = ({ title, current, previous, unit, preference }) => {
-    const deltaMeta = getDeltaMeta(current, previous, preference);
-    const tone = deltaMeta.tone === 'good'
-      ? theme.palette.success.main
-      : deltaMeta.tone === 'bad'
-        ? theme.palette.error.main
-        : theme.palette.text.secondary;
-
-    return (
-      <Card sx={{ ...getCategoryBoxSx(theme, 'other'), ...fixedCardSx, p: 2.5, borderRadius: 4 }}>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-          {title}
-        </Typography>
-        <Typography variant="h5" fontWeight="800" sx={{ mb: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
-          {formatNumber(current)} {unit}
-        </Typography>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }}>
-          <Chip
-            size="small"
-            label={deltaMeta.label}
-            variant="outlined"
-            sx={{
-              maxWidth: '100%',
-              color: tone,
-              borderColor: alpha(tone, 0.42),
-              backgroundColor: alpha(tone, theme.palette.mode === 'dark' ? 0.12 : 0.08),
-              '& .MuiChip-label': {
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              },
-            }}
-          />
-          <Typography variant="caption" color="text.secondary">
-            Previous: {formatNumber(previous)} {unit}
-          </Typography>
-        </Stack>
-      </Card>
-    );
-  };
+  const maxFleetCost = Math.max(...fleet.map((v) => Number(v.total_cost || 0)), 1);
 
   return (
-    <Box className="section-shell">
-      <Typography variant="h4" fontWeight="800" sx={{ mb: 0.75 }}>
-        Dashboard
-      </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Monthly overview first, with the items that need attention surfaced before deeper analysis.
-      </Typography>
+    <Box className="section-shell stagger">
+      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+        <Box>
+          <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 0.5 }}>Dashboard</Typography>
+          <Typography variant="body1" color="text.secondary">
+            {new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' })} so far.
+          </Typography>
+        </Box>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>Add record</Button>
+      </Stack>
 
-      {summaryRows.map((row, index) => (
-        <Box sx={{ ...summaryRowSx, mb: index === summaryRows.length - 1 ? 0.5 : 3 }} key={`summary-row-${index}`}>
-          {row.map((item) => (
-            <Box sx={summaryRowItemSx} key={item.title}>
-              {item.kind === 'kpi' ? <KPIStatCard {...item} /> : <ComparisonCard {...item} />}
+      {/* 1. Anything that needs a decision comes first, minus what was dismissed. */}
+      {visibleAlerts.length > 0 ? (
+        <Stack spacing={1} sx={{ mb: 1 }}>
+          {visibleAlerts.map((alert) => (
+            <Alert
+              key={alert.id || alert.title}
+              severity={alert.level === 'warning' ? 'warning' : alert.level === 'success' ? 'success' : 'info'}
+              sx={{ borderRadius: 2 }}
+              action={
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  {getAlertTarget(alert) ? (
+                    <Button color="inherit" size="small" onClick={() => navigate(getAlertTarget(alert).to)}>
+                      {getAlertTarget(alert).label}
+                    </Button>
+                  ) : null}
+                  <IconButton
+                    size="small"
+                    color="inherit"
+                    aria-label={`Dismiss: ${alert.title}`}
+                    onClick={() => dismissAlert(alert)}
+                  >
+                    <CloseIcon fontSize="small" />
+                  </IconButton>
+                </Stack>
+              }
+            >
+              <strong>{alert.title}</strong> — {alert.description}
+            </Alert>
+          ))}
+        </Stack>
+      ) : null}
+
+      {hiddenCount > 0 ? (
+        <Button
+          size="small"
+          startIcon={<VisibilityIcon />}
+          onClick={restoreAlerts}
+          sx={{ mb: 1, alignSelf: 'flex-start' }}
+        >
+          Show {hiddenCount} hidden {hiddenCount === 1 ? 'alert' : 'alerts'}
+        </Button>
+      ) : null}
+
+      {/* 2. One headline number for the month, then the detail behind it. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Typography variant="body2" color="text.secondary">Total this month</Typography>
+        <Stack direction="row" spacing={2} alignItems="baseline" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+          <Typography variant="h3" component="div" fontWeight={800} sx={{ lineHeight: 1.1 }}>
+            {huf(current.total_cost_huf)}
+          </Typography>
+          <DeltaChip delta={costDelta} />
+        </Stack>
+
+        <Divider sx={{ mb: 2 }} />
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+          {supporting.map((item) => (
+            <Box key={item.label} sx={{ borderLeft: `3px solid ${item.color}`, pl: 1.5 }}>
+              <Typography variant="body2" color="text.secondary">{item.label}</Typography>
+              <Typography variant="h6" component="div" fontWeight={700}>{item.value}</Typography>
+              <Typography variant="caption" color="text.secondary">{item.hint}</Typography>
             </Box>
           ))}
         </Box>
-      ))}
+      </Card>
 
-      <Box sx={wideDashboardRowSx}>
-        <Box sx={wideDashboardPrimaryItemSx}>
-          <Card sx={{ ...getCategoryBoxSx(theme, 'other'), ...fixedCardSx, p: 3, borderRadius: 4 }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 0.75 }}>
-              Monthly Operating Cost Split
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Session-related spend and extra costs are kept together here, without pulling the page into full analytics mode.
-            </Typography>
-            <Box sx={{ width: '100%', height: isMobile ? 260 : 340 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.monthly_stats || []}>
-                  <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                  <XAxis
-                    dataKey="month"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
-                  />
-                  <Tooltip
-                    cursor={{ fill: 'transparent' }}
-                    contentStyle={tooltipStyle}
-                    formatter={(value, key) => [`${formatNumber(value)} HUF`, key === 'session_cost_huf' ? 'Driving spend' : 'Extra costs']}
-                  />
-                  <Bar dataKey="session_cost_huf" stackId="cost" fill={theme.palette.primary.main} />
-                  <Bar dataKey="expense_cost_huf" stackId="cost" radius={[10, 10, 0, 0]} fill={theme.palette.secondary.main} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Box>
-          </Card>
+      {/* 3. The trend behind the headline. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/analytics')}>Analytics</Button>}>
+          Last 12 months
+        </SectionTitle>
+        <Box sx={{ width: '100%', height: isMobile ? 220 : 300 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={stats.monthly_stats || []} margin={{ left: 4, right: 4 }}>
+              <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
+              <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
+                tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+              <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
+                tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+              <Tooltip
+                cursor={{ fill: alpha(theme.palette.primary.main, 0.06) }}
+                contentStyle={tooltipStyle}
+                formatter={(value, name) => [huf(value), name]}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
+              <Bar dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+                fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
+              <Bar dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
+            </BarChart>
+          </ResponsiveContainer>
         </Box>
+      </Card>
 
-        <Box sx={wideDashboardSecondaryItemSx}>
-          <Card sx={{ ...getCategoryBoxSx(theme, 'other'), ...fixedCardSx, p: 3, borderRadius: 4 }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 2 }}>
-              Current Month Composition
-            </Typography>
-            <Stack spacing={2}>
-              {compositionItems.map((item) => (
-                <Box key={item.label}>
-                  <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.75 }}>
-                    <Typography variant="body2" color="text.secondary">
-                      {item.label}
+      {/* 4. What just happened, and what is coming. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
+        <Card sx={{ p: 3, borderRadius: 4 }}>
+          <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/activity')}>All records</Button>}>
+            Recent
+          </SectionTitle>
+          {recent.length === 0 ? (
+            <Typography color="text.secondary" variant="body2">Nothing logged yet this month.</Typography>
+          ) : (
+            <Stack divider={<Divider />}>
+              {recent.slice(0, 5).map((item) => (
+                <Stack key={`${item.activity_type}-${item.id}`} direction="row" justifyContent="space-between"
+                  alignItems="center" spacing={1} sx={{ py: 1.25 }}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                      <Typography variant="body2" fontWeight={700} noWrap>{item.title}</Typography>
+                      <Chip size="small" variant="outlined" label={formatCategoryLabel(item.category)}
+                        sx={getCategoryChipSx(theme, item.category)} />
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">
+                      {new Date(item.occurred_at).toLocaleDateString()} · {item.vehicle_name}
                     </Typography>
-                    <Typography variant="body2" fontWeight="700">
-                      {formatNumber(item.value)} HUF
-                    </Typography>
-                  </Stack>
-                  <Box sx={{ height: 8, borderRadius: 999, backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.12), overflow: 'hidden' }}>
-                    <Box
-                      sx={{
-                        width: `${compositionTotal > 0 ? (item.value / compositionTotal) * 100 : 0}%`,
-                        height: '100%',
-                        backgroundColor: item.color,
-                      }}
-                    />
                   </Box>
-                </Box>
-              ))}
-              <Divider flexItem />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Energy tracked this month
-                </Typography>
-                <Typography variant="h6" fontWeight="800">
-                  {formatNumber(currentMonth.total_energy_kwh)} kWh
-                </Typography>
-              </Box>
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Largest expense category this month
-                </Typography>
-                <Typography variant="body1" fontWeight="700" sx={{ textTransform: 'capitalize', overflowWrap: 'anywhere' }}>
-                  {stats.cost_composition?.top_expense_category?.category || 'No extra expenses yet'}
-                </Typography>
-                {stats.cost_composition?.top_expense_category ? (
-                  <Typography variant="body2" color="text.secondary">
-                    {formatNumber(stats.cost_composition.top_expense_category.total_amount)} HUF
+                  <Typography variant="body2" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
+                    {huf(item.amount_huf)}
                   </Typography>
-                ) : null}
-              </Box>
+                </Stack>
+              ))}
             </Stack>
-          </Card>
-        </Box>
-      </Box>
+          )}
+        </Card>
 
-      <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-        <Box sx={summaryRowItemSx}>
-          <Card sx={{ ...getCategoryBoxSx(theme, 'other'), ...fixedCardSx, p: 3, borderRadius: 4 }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 2 }}>
-              Fleet Snapshot
+        <Card sx={{ p: 3, borderRadius: 4 }}>
+          <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/activity?tab=recurring')}>Manage</Button>}>
+            Coming up
+          </SectionTitle>
+          {reminders.length === 0 ? (
+            <Typography color="text.secondary" variant="body2">
+              No recurring costs due. Add one under Records → Recurring.
             </Typography>
-            <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
-              <Chip label={`${stats.fleet_snapshot?.electric_count || 0} electric`} sx={{ ...getFuelBoxSx(theme, 'electric', { compact: true, borderOnly: true }), height: 32 }} />
-              <Chip label={`${stats.fleet_snapshot?.hybrid_count || 0} hybrid`} sx={{ ...getFuelBoxSx(theme, 'hybrid', { compact: true, borderOnly: true }), height: 32 }} />
-              <Chip label={`${stats.fleet_snapshot?.combustion_count || 0} fuel`} sx={{ ...getFuelBoxSx(theme, 'petrol', { compact: true, borderOnly: true }), height: 32 }} />
-            </Stack>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              {stats.fleet_snapshot?.total_vehicles || 0} vehicles tracked across the account.
-            </Typography>
-            <Stack spacing={1.25}>
-              {(stats.fleet_snapshot?.top_cost_vehicles || []).map((vehicle) => (
-                <Box key={vehicle.id} sx={{ ...getFuelBoxSx(theme, vehicle.fuel_type, { compact: true, borderOnly: true }) }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
-                    <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography variant="body2" fontWeight="700" sx={{ overflowWrap: 'anywhere' }}>
-                        {vehicle.name}
+          ) : (
+            <Stack divider={<Divider />}>
+              {reminders.slice(0, 5).map((reminder) => {
+                const days = Math.round(
+                  (new Date(reminder.next_due_date).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000,
+                );
+                return (
+                  <Stack key={reminder.id} direction="row" justifyContent="space-between" alignItems="center"
+                    spacing={1} sx={{ py: 1.25 }}>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" fontWeight={700} noWrap>
+                        {reminder.description || formatCategoryLabel(reminder.category)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {formatNumber(vehicle.distance_km)} km tracked
+                        {reminder.vehicle_name} · {huf(reminder.amount)}
                       </Typography>
                     </Box>
-                    <Typography variant="body2" fontWeight="800" sx={{ flexShrink: 0 }}>
-                      {formatNumber(vehicle.total_cost)} HUF
-                    </Typography>
+                    <Chip size="small" variant="outlined"
+                      color={days < 0 ? 'error' : days <= 14 ? 'warning' : 'default'}
+                      label={days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Today' : `${days}d`} />
                   </Stack>
-                </Box>
-              ))}
-            </Stack>
-          </Card>
-        </Box>
-
-        <Box sx={summaryRowItemSx}>
-          <Card sx={{ ...getCategoryBoxSx(theme, 'other'), ...fixedCardSx, p: 3, borderRadius: 4 }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 2 }}>
-              Alerts and Reminders
-            </Typography>
-            <Stack spacing={1.5} sx={{ mb: 2.5 }}>
-              {(stats.alerts || []).map((alert) => {
-                const tone = getAlertTone(theme, alert.level);
-
-                return (
-                  <Box
-                    key={`${alert.level}-${alert.title}`}
-                    sx={{
-                      p: 1.5,
-                      minWidth: 0,
-                      borderRadius: 3,
-                      border: `1px solid ${tone.borderColor}`,
-                      backgroundColor: tone.backgroundColor,
-                    }}
-                  >
-                    <Typography variant="body2" fontWeight="700" sx={{ color: tone.color, mb: 0.25, overflowWrap: 'anywhere' }}>
-                      {alert.title}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
-                      {alert.description}
-                    </Typography>
-                  </Box>
                 );
               })}
             </Stack>
-
-            <Divider flexItem sx={{ mb: 2.5 }} />
-
-            <Typography variant="subtitle1" fontWeight="700" sx={{ mb: 1.5 }}>
-              Upcoming recurring expenses
-            </Typography>
-            {(stats.upcoming_reminders || []).length ? (
-              <Stack spacing={1.25}>
-                {stats.upcoming_reminders.map((reminder) => (
-                  <Box key={reminder.id} sx={{ ...getCategoryBoxSx(theme, reminder.category || 'other', { compact: true }) }}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1} sx={{ minWidth: 0 }}>
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography variant="body2" fontWeight="700" sx={{ textTransform: 'capitalize', overflowWrap: 'anywhere' }}>
-                          {reminder.category}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
-                          {reminder.vehicle_name || 'General'} • {new Date(reminder.next_due_date).toLocaleDateString()}
-                        </Typography>
-                      </Box>
-                      <Typography variant="body2" fontWeight="800" sx={{ flexShrink: 0 }}>
-                        {formatNumber(reminder.amount)} HUF
-                      </Typography>
-                    </Stack>
-                  </Box>
-                ))}
-              </Stack>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                No recurring reminders due in the next 30 days.
-              </Typography>
-            )}
-          </Card>
-        </Box>
-
-        <Box sx={emptyDashboardSlotSx} />
+          )}
+        </Card>
       </Box>
+
+      {/* 5. Where the money goes across the fleet. */}
+      {fleet.length > 0 ? (
+        <Card sx={{ p: 3, borderRadius: 4 }}>
+          <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/vehicles')}>Vehicles</Button>}>
+            Cost by vehicle, all time
+          </SectionTitle>
+          <Stack spacing={2}>
+            {fleet.map((vehicle) => (
+              <Box key={vehicle.id}>
+                <Stack direction="row" justifyContent="space-between" spacing={1} sx={{ mb: 0.5 }}>
+                  <Typography variant="body2" fontWeight={700} noWrap>{vehicle.name}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                    {huf(vehicle.total_cost)}
+                    {vehicle.cost_per_100km ? ` · ${huf(vehicle.cost_per_100km)}/100km` : ''}
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  variant="determinate"
+                  value={(Number(vehicle.total_cost || 0) / maxFleetCost) * 100}
+                  sx={{ height: 8, borderRadius: 4 }}
+                />
+              </Box>
+            ))}
+          </Stack>
+        </Card>
+      ) : null}
+
+      <RecordDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={load} vehicles={vehicles} editing={null} />
     </Box>
   );
 };

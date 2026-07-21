@@ -1,30 +1,35 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
   Card,
   Chip,
-  CircularProgress,
   Divider,
-  FormControl,
-  Grid,
-  InputLabel,
+  LinearProgress,
   MenuItem,
-  Select,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TableSortLabel,
+  TextField,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  useMediaQuery,
   useTheme,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  Area,
-  AreaChart,
   Bar,
-  BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Legend,
+  Line,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -33,922 +38,522 @@ import {
   YAxis,
 } from 'recharts';
 import { toast } from 'sonner';
+import { apiFetch } from '../utils/api';
+import { useDelayedLoading } from '../utils/useDelayedLoading';
+import { getChartColors } from '../utils/chartColors';
+import { formatCategoryLabel } from '../utils/expenseCategories';
 import { AnalyticsSkeleton } from './SectionSkeletons';
-import { getCategoryBoxSx } from '../utils/categoryVisuals';
-import { getFuelBoxSx } from '../utils/fuelVisuals';
-import { supportsCharging } from '../utils/vehicleRules';
 
-const COLORS = ['#00F5FF', '#FF00E5', '#32CD32', '#FFA500', '#8A2BE2'];
-const RANGE_OPTIONS = [
-  { value: '30d', label: '30D' },
-  { value: '90d', label: '90D' },
-  { value: 'ytd', label: 'YTD' },
+const RANGES = [
+  { value: '30d', label: '30 days' },
+  { value: '90d', label: '90 days' },
+  { value: 'ytd', label: 'Year' },
   { value: 'all', label: 'All' },
 ];
 
-const formatNumber = (value) => Number(value || 0).toLocaleString();
-const formatCategoryLabel = (value) => value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+const huf = (v) => `${Math.round(Number(v || 0)).toLocaleString()} HUF`;
+const km = (v) => `${Math.round(Number(v || 0)).toLocaleString()} km`;
+const compact = (v) =>
+  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v || 0));
+const monthLabel = (value) => {
+  if (!value) return '';
+  const [y, m] = value.split('-');
+  return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: 'short' });
+};
 
+const COLUMNS = [
+  { id: 'name', label: 'Vehicle', numeric: false },
+  { id: 'total_cost', label: 'Total cost', numeric: true, format: huf },
+  { id: 'session_cost', label: 'Driving', numeric: true, format: huf },
+  { id: 'expense_cost', label: 'Other', numeric: true, format: huf },
+  { id: 'distance_km', label: 'Distance', numeric: true, format: km },
+  { id: 'cost_per_100km', label: 'Per 100 km', numeric: true, format: (v) => (v ? huf(v) : '—') },
+  { id: 'total_energy', label: 'Energy', numeric: true, format: (v) => (v ? `${Math.round(v).toLocaleString()} kWh` : '—') },
+];
+
+// Three ways to read "efficient", because they disagree and the disagreement matters:
+// a car can be the cheapest to drive while looking expensive overall simply because
+// its insurance is. Lower is better for all three.
+const EFFICIENCY_METRICS = {
+  running: {
+    label: 'Cost to drive',
+    unit: 'HUF / 100 km',
+    note: 'Charging and fuel only — what it costs to actually move the car.',
+    compute: (v) => (v.distance_km > 0 ? (Number(v.session_cost || 0) / v.distance_km) * 100 : null),
+    format: huf,
+  },
+  total: {
+    label: 'Total cost',
+    unit: 'HUF / 100 km',
+    note: 'Everything divided by distance — fuel plus insurance, tax, maintenance.',
+    compute: (v) => (v.distance_km > 0 ? Number(v.cost_per_100km || 0) : null),
+    format: huf,
+  },
+  energy: {
+    label: 'Energy use',
+    unit: 'kWh / 100 km',
+    note: 'Consumption regardless of price. Only vehicles that charge appear here.',
+    compute: (v) => (v.distance_km > 0 && v.total_energy > 0 ? (Number(v.total_energy) / v.distance_km) * 100 : null),
+    format: (v) => `${Number(v).toFixed(1)} kWh`,
+  },
+};
+
+const Figure = ({ label, value, hint, color }) => (
+  <Box sx={{ borderLeft: `3px solid ${color}`, pl: 1.5 }}>
+    <Typography variant="body2" color="text.secondary">{label}</Typography>
+    <Typography variant="h6" component="div" fontWeight={700}>{value}</Typography>
+    {hint ? <Typography variant="caption" color="text.secondary">{hint}</Typography> : null}
+  </Box>
+);
+
+/**
+ * The "why" behind the dashboard's headline.
+ *
+ * The dashboard answers how this month is going; this page exists to compare and
+ * explain, which is why everything here obeys the range selector. It used to render
+ * vehicle_stats five separate times — two bar charts plus three leaderboards over the
+ * same array — so the comparison is now a single sortable table.
+ */
 const Analytics = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const chartAnimation = !useMediaQuery('(prefers-reduced-motion: reduce)');
+  const COLORS = getChartColors(theme);
+
+  const [range, setRange] = useState('all');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Skip the placeholder entirely when the data beats the delay.
+  const showSkeleton = useDelayedLoading(loading);
+  // Switching range should not blank the page: keep the previous numbers on screen and
+  // dim them slightly while the new ones arrive. Only the very first load shows the
+  // skeleton, because there is nothing to keep.
+  const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [rangeKey, setRangeKey] = useState('all');
-  const [analyticsReloadKey, setAnalyticsReloadKey] = useState(0);
+  const [orderBy, setOrderBy] = useState('total_cost');
+  const [order, setOrder] = useState('desc');
+  const [metricKey, setMetricKey] = useState('running');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [drilldown, setDrilldown] = useState(null);
-  const [loadingDrilldown, setLoadingDrilldown] = useState(false);
-  const [drilldownError, setDrilldownError] = useState('');
-  const [drilldownReloadKey, setDrilldownReloadKey] = useState(0);
-  const theme = useTheme();
 
-  useEffect(() => {
-    const fetchAnalytics = async (attempt = 0) => {
-      setLoading(true);
-      setErrorMessage('');
-
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error('Authentication token missing. Please sign in again.');
-        }
-
-        const res = await fetch(`/api/analytics/summary?range=${rangeKey}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        if (!res.ok) {
-          let detail = 'Analytics data is currently unavailable.';
-
-          try {
-            const payload = await res.json();
-            detail = payload?.detail || detail;
-          } catch {
-            detail = 'Analytics data is currently unavailable.';
-          }
-
-          throw new Error(detail);
-        }
-
-        const payload = await res.json();
-        if (!payload || typeof payload !== 'object') {
-          throw new Error('Analytics response payload was invalid.');
-        }
-
-        setData(payload);
-      } catch (error) {
-        if (attempt < 1) {
-          window.setTimeout(() => {
-            fetchAnalytics(attempt + 1);
-          }, 700);
-          return;
-        }
-
-        const nextMessage = error instanceof Error ? error.message : 'Failed to load analytics';
-        setData(null);
-        setErrorMessage(nextMessage);
-        toast.error(nextMessage);
-      } finally {
-        setLoading(false);
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await apiFetch(`/api/analytics/summary?range=${range}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.detail || 'Analytics is unavailable right now');
       }
-    };
-
-    fetchAnalytics();
-  }, [analyticsReloadKey, rangeKey]);
-
-  useEffect(() => {
-    if (!data?.vehicle_stats?.length) {
-      setSelectedVehicleId('');
-      return;
+      setData(await res.json());
+      setErrorMessage('');
+    } catch (error) {
+      setData(null);
+      setErrorMessage(error.message);
+      toast.error(error.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
+  }, [range]);
 
-    const exists = data.vehicle_stats.some((vehicle) => String(vehicle.id) === String(selectedVehicleId));
-    if (!exists) {
-      setSelectedVehicleId(String(data.vehicle_stats[0].id));
+  useEffect(() => { load(); }, [load]);
+
+  // Default the drilldown to whichever vehicle leads the current sort.
+  useEffect(() => {
+    const stats = data?.vehicle_stats || [];
+    if (!stats.length) { setSelectedVehicleId(''); return; }
+    if (!stats.some((v) => String(v.id) === String(selectedVehicleId))) {
+      setSelectedVehicleId(String(stats[0].id));
     }
   }, [data, selectedVehicleId]);
 
   useEffect(() => {
-    if (!selectedVehicleId) {
-      setDrilldown(null);
-      setDrilldownError('');
-      return;
-    }
+    if (!selectedVehicleId) { setDrilldown(null); return; }
+    apiFetch(`/api/analytics/vehicles/${selectedVehicleId}?range=${range}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then(setDrilldown)
+      .catch(() => setDrilldown(null));
+  }, [selectedVehicleId, range]);
 
-    const fetchDrilldown = async (attempt = 0) => {
-      setLoadingDrilldown(true);
-      setDrilldownError('');
+  const sortedVehicles = useMemo(() => {
+    const rows = [...(data?.vehicle_stats || [])];
+    return rows.sort((a, b) => {
+      const av = a[orderBy] ?? 0;
+      const bv = b[orderBy] ?? 0;
+      const cmp = typeof av === 'string' ? av.localeCompare(String(bv)) : Number(av) - Number(bv);
+      return order === 'asc' ? cmp : -cmp;
+    });
+  }, [data, orderBy, order]);
 
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error('Authentication token missing. Please sign in again.');
-        }
+  const metric = EFFICIENCY_METRICS[metricKey];
+  const hasEnergyData = (data?.vehicle_stats || []).some(
+    (v) => v.distance_km > 0 && Number(v.total_energy || 0) > 0,
+  );
 
-        const res = await fetch(`/api/analytics/vehicles/${selectedVehicleId}?range=${rangeKey}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+  // Vehicles without distance (or without charging, for the energy view) cannot be
+  // placed on this scale, so they are counted out rather than shown as zero.
+  const ranked = useMemo(() => {
+    const rows = (data?.vehicle_stats || [])
+      .map((v) => ({ ...v, value: metric.compute(v) }))
+      .filter((v) => v.value !== null && v.value > 0);
+    return rows.sort((a, b) => a.value - b.value);
+  }, [data, metric]);
 
-        if (!res.ok) {
-          let detail = 'Vehicle drilldown is currently unavailable.';
+  const excludedCount = (data?.vehicle_stats || []).length - ranked.length;
 
-          try {
-            const payload = await res.json();
-            detail = payload?.detail || detail;
-          } catch {
-            detail = 'Vehicle drilldown is currently unavailable.';
-          }
+  // Declared after hasEnergyData on purpose: the dependency array is evaluated during
+  // render, so referencing it earlier hits the temporal dead zone and throws.
+  useEffect(() => {
+    if (metricKey === 'energy' && !hasEnergyData) setMetricKey('running');
+  }, [metricKey, hasEnergyData]);
 
-          throw new Error(detail);
-        }
+  const handleSort = (columnId) => {
+    if (orderBy === columnId) setOrder(order === 'asc' ? 'desc' : 'asc');
+    else { setOrderBy(columnId); setOrder(columnId === 'name' ? 'asc' : 'desc'); }
+  };
 
-        const payload = await res.json();
-        if (!payload || typeof payload !== 'object') {
-          throw new Error('Vehicle drilldown response payload was invalid.');
-        }
+  const tooltipStyle = {
+    borderRadius: 12,
+    backgroundColor: theme.palette.background.paper,
+    border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
+  };
 
-        setDrilldown(payload);
-      } catch (error) {
-        if (attempt < 1) {
-          window.setTimeout(() => {
-            fetchDrilldown(attempt + 1);
-          }, 700);
-          return;
-        }
+  const rangeSelector = (
+    <ToggleButtonGroup exclusive size="small" value={range}
+      onChange={(_, next) => next && setRange(next)} aria-label="Time range">
+      {RANGES.map((r) => <ToggleButton key={r.value} value={r.value}>{r.label}</ToggleButton>)}
+    </ToggleButtonGroup>
+  );
 
-        const nextMessage = error instanceof Error ? error.message : 'Failed to load vehicle drilldown';
-        setDrilldown(null);
-        setDrilldownError(nextMessage);
-        toast.error(nextMessage);
-      } finally {
-        setLoadingDrilldown(false);
-      }
-    };
+  if (showSkeleton) return <AnalyticsSkeleton />;
+  if (loading) return null;
 
-    fetchDrilldown();
-  }, [drilldownReloadKey, rangeKey, selectedVehicleId]);
-
-  if (loading) return <AnalyticsSkeleton />;
   if (!data) {
     return (
-      <Box className="section-shell">
-        <Typography variant="h4" fontWeight="800" sx={{ mb: 1 }}>
-          Analytics
-        </Typography>
-        <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: { xs: 3, sm: 4 }, borderRadius: 4, maxWidth: 720 }}>
-          <Stack spacing={1.25} alignItems="flex-start">
-            <Chip size="small" label="Status" variant="outlined" />
-            <Typography variant="h6">
-              Analytics data unavailable
-            </Typography>
-            <Typography color="text.secondary">
-              {errorMessage || 'Add sessions and expenses to generate analytics.'}
-            </Typography>
-            <Button
-              variant="outlined"
-              onClick={() => {
-                setErrorMessage('');
-                setAnalyticsReloadKey((current) => current + 1);
-              }}
-            >
-              Retry
-            </Button>
-          </Stack>
+      <Box className="section-shell stagger">
+        <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 0.5 }}>Analytics</Typography>
+        <Card sx={{ p: 4, borderRadius: 4, maxWidth: 620, textAlign: 'center', mx: 'auto', mt: 3 }}>
+          <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Analytics unavailable</Typography>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            {errorMessage || 'Add some records and this page fills in.'}
+          </Typography>
+          <Button variant="contained" onClick={load}>Try again</Button>
         </Card>
       </Box>
     );
   }
 
-  const tooltipStyle = {
-    borderRadius: '16px',
-    backgroundColor: theme.palette.background.paper,
-    border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
-    boxShadow: theme.palette.mode === 'dark'
-      ? `0 18px 40px ${alpha('#000000', 0.32)}`
-      : '0 14px 30px rgba(20, 31, 41, 0.12)',
-    backdropFilter: 'blur(14px)',
-  };
-  const analyticsCardSx = {
-    p: 3,
-    borderRadius: 4,
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: 420,
-  };
-  const summaryCardSx = {
-    p: 3,
-    borderRadius: 4,
-    width: '100%',
-    height: '100%',
-    ...getCategoryBoxSx(theme, 'other'),
-    borderColor: alpha(theme.palette.secondary.main, 0.72),
-    boxShadow: `0 0 0 1px ${alpha(theme.palette.secondary.main, 0.14)} inset, 0 0 18px ${alpha(theme.palette.secondary.main, 0.12)}`,
-  };
-  const chartBodySx = {
-    width: '100%',
-    flex: 1,
-    minHeight: 300,
-  };
-  const analyticsRowSx = {
-    display: 'flex',
-    gap: 3,
-    flexWrap: 'wrap',
-    mb: 0.5,
-  };
-  const twoColItemSx = {
-    width: { xs: '100%', md: 'calc((100% - 24px) / 2)' },
-    minWidth: 0,
-    display: 'flex',
-  };
-  const threeColItemSx = {
-    width: { xs: '100%', md: 'calc((100% - 48px) / 3)' },
-    minWidth: 0,
-    display: 'flex',
-  };
-  const energyVehicles = (data.vehicle_stats || []).filter((vehicle) => supportsCharging(vehicle.fuel_type));
-  const distanceVehicles = (data.vehicle_stats || []).filter((vehicle) => vehicle.cost_per_100km !== null);
-  const totalCostLeaderboard = [...(data.vehicle_stats || [])]
-    .sort((left, right) => Number(right.total_cost || 0) - Number(left.total_cost || 0))
-    .slice(0, 3);
-  const efficiencyLeaderboard = [...distanceVehicles]
-    .sort((left, right) => Number(right.cost_per_100km || 0) - Number(left.cost_per_100km || 0))
-    .slice(0, 3);
-  const extraCostLeaderboard = [...(data.vehicle_stats || [])]
-    .sort((left, right) => Number(right.expense_cost || 0) - Number(left.expense_cost || 0))
-    .slice(0, 3);
-  const selectedVehicle = (data.vehicle_stats || []).find((vehicle) => String(vehicle.id) === String(selectedVehicleId));
-
-  const StatCard = ({ title, value, unit, description, color = 'secondary.main' }) => (
-    <Card sx={summaryCardSx}>
-      <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-        {title}
-      </Typography>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
-        <Typography variant="h4" fontWeight="800" sx={{ color }}>
-          {formatNumber(value)}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {unit}
-        </Typography>
-      </Box>
-      <Typography variant="body2" color="text.secondary">
-        {description}
-      </Typography>
-    </Card>
-  );
-
-  const SectionHeading = ({ title, description, action = null }) => (
-    <Stack
-      direction={{ xs: 'column', md: 'row' }}
-      justifyContent="space-between"
-      alignItems={{ xs: 'flex-start', md: 'center' }}
-      spacing={1.5}
-      sx={{ mb: 1.5 }}
-    >
-      <Box>
-        <Typography variant="h5" fontWeight="800" sx={{ mb: 0.5 }}>
-          {title}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {description}
-        </Typography>
-      </Box>
-      {action}
-    </Stack>
-  );
-
-  const LeaderboardCard = ({ title, items, metricKey, metricUnit, emptyText }) => (
-    <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4, width: '100%', height: '100%' }}>
-      <Typography variant="h6" fontWeight="700" sx={{ mb: 2 }}>
-        {title}
-      </Typography>
-      {items.length ? (
-        <Stack spacing={1.25}>
-          {items.map((vehicle) => (
-            <Box key={`${title}-${vehicle.id}`} sx={{ ...getFuelBoxSx(theme, vehicle.fuel_type, { compact: true, borderOnly: true }) }}>
-              <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
-                <Box>
-                  <Typography variant="body2" fontWeight="700">
-                    {vehicle.name}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {formatNumber(vehicle.distance_km)} km tracked
-                  </Typography>
-                </Box>
-                <Typography variant="body2" fontWeight="800">
-                  {formatNumber(vehicle[metricKey])} {metricUnit}
-                </Typography>
-              </Stack>
-            </Box>
-          ))}
-        </Stack>
-      ) : (
-        <Typography variant="body2" color="text.secondary">
-          {emptyText}
-        </Typography>
-      )}
-    </Card>
-  );
-
-  const reloadDrilldown = () => {
-    setDrilldownError('');
-    setDrilldownReloadKey((current) => current + 1);
-  };
+  const summary = data.summary || {};
+  const categories = data.expense_categories || [];
+  const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
+  const hasData = (data.vehicle_stats || []).length > 0;
+  const rangeLabel = RANGES.find((r) => r.value === range)?.label.toLowerCase();
 
   return (
-    <Box className="section-shell">
-      <Stack
-        direction={{ xs: 'column', xl: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'flex-start', xl: 'center' }}
-        spacing={2}
-        sx={{ mb: 3 }}
-      >
+    <Box
+      className="section-shell stagger"
+      sx={{
+        // Dim the results but not the header: the range selector lives up there and
+        // must stay usable, including for a quick second change mid-request.
+        '& > *:not(:first-of-type)': {
+          opacity: refreshing ? 0.5 : 1,
+          transition: 'opacity 160ms ease-out',
+        },
+      }}
+    >
+      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
         <Box>
-          <Typography variant="h4" fontWeight="800" sx={{ mb: 0.75 }}>
-            Analytics
-          </Typography>
+          <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 0.5 }}>Analytics</Typography>
           <Typography variant="body1" color="text.secondary">
-            Comparison and trend view for cost structure, vehicle efficiency, and energy behavior.
+            Compare vehicles and see where the money actually goes.
           </Typography>
         </Box>
-
-        <Card sx={{ ...getCategoryBoxSx(theme, 'other', { compact: true }), p: 1.25, borderRadius: 4 }}>
-          <ToggleButtonGroup
-            exclusive
-            size="small"
-            value={rangeKey}
-            disabled={loading || loadingDrilldown}
-            onChange={(_event, value) => {
-              if (value) {
-                setRangeKey(value);
-              }
-            }}
-          >
-            {RANGE_OPTIONS.map((option) => (
-              <ToggleButton key={option.value} value={option.value} sx={{ px: 1.75, textTransform: 'none' }}>
-                {option.label}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Card>
+        {rangeSelector}
       </Stack>
 
-      <Box sx={analyticsRowSx}>
-        <Box sx={twoColItemSx}>
-          <StatCard
-            title="Operating Cost"
-            value={data.summary?.total_operating_cost_huf}
-            unit="HUF"
-            description="All tracked operating cost across sessions and extra expenses in the selected range."
-            color="secondary.main"
-          />
-        </Box>
-        <Box sx={twoColItemSx}>
-          <StatCard
-            title="Tracked Distance"
-            value={data.summary?.total_distance_km}
-            unit="km"
-            description="Distance covered across the currently filtered analytics window."
-            color="success.main"
-          />
-        </Box>
-        <Box sx={twoColItemSx}>
-          <StatCard
-            title="Average Cost / 100 km"
-            value={data.summary?.avg_cost_per_100km}
-            unit="HUF"
-            description="Normalized operating cost for vehicles with distance data."
-            color="warning.main"
-          />
-        </Box>
-        <Box sx={twoColItemSx}>
-          <StatCard
-            title="Average Charging Cost"
-            value={data.avg_cost_per_kwh}
-            unit="HUF / kWh"
-            description="Average charging network cost across filtered charging events."
-            color="primary.main"
-          />
-        </Box>
-      </Box>
+      {!hasData ? (
+        <Card sx={{ p: 4, borderRadius: 4, textAlign: 'center', maxWidth: 620, mx: 'auto' }}>
+          <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Nothing in this range</Typography>
+          <Typography color="text.secondary">Widen the range, or log a few more records.</Typography>
+        </Card>
+      ) : (
+        <>
+          {/* Headline figures for the selected range. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2 }}>
+              <Figure label="Total cost" value={huf(summary.total_operating_cost_huf)} hint={rangeLabel}
+                color={theme.palette.secondary.main} />
+              <Figure label="Distance" value={km(summary.total_distance_km)}
+                hint={`${(data.vehicle_stats || []).length} vehicles`} color={theme.palette.primary.main} />
+              <Figure label="Cost per 100 km" value={huf(summary.avg_cost_per_100km)} hint="across the fleet"
+                color={theme.palette.warning.main} />
+              <Figure label="Cost per kWh" value={huf(data.avg_cost_per_kwh)}
+                hint={`${Math.round(summary.total_energy_kwh || 0).toLocaleString()} kWh charged`}
+                color={theme.palette.success.main} />
+            </Box>
+          </Card>
 
-      <SectionHeading
-        title="Trends"
-        description="Time-series panels stay here so the dashboard can remain compact and operational."
-      />
-      <Box sx={analyticsRowSx}>
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getCategoryBoxSx(theme, 'other') }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Monthly Operating Cost Split
+          {/* Cost over time, with the efficiency line the dashboard does not show. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Cost over time</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Bars are spend, the line is cost per 100 km — a month can look expensive simply because you drove more.
             </Typography>
-            <Box sx={chartBodySx}>
-              <ResponsiveContainer>
-                <BarChart data={data.monthly_trend || []}>
+            <Box sx={{ width: '100%', height: isMobile ? 240 : 320 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data.monthly_trend || []} margin={{ left: 4, right: 4 }}>
                   <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    formatter={(value, key) => [`${formatNumber(value)} HUF`, key === 'session_cost_huf' ? 'Driving spend' : 'Extra costs']}
-                  />
-                  <Bar dataKey="session_cost_huf" stackId="cost" fill={theme.palette.primary.main} radius={[10, 10, 0, 0]} />
-                  <Bar dataKey="expense_cost_huf" stackId="cost" fill={theme.palette.secondary.main} radius={[10, 10, 0, 0]} />
-                </BarChart>
+                  <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
+                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                  <YAxis yAxisId="cost" tickFormatter={compact} axisLine={false} tickLine={false} width={48}
+                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                  <YAxis yAxisId="eff" orientation="right" tickFormatter={compact} axisLine={false} tickLine={false} width={48}
+                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [huf(value), name]} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
+                  <Bar yAxisId="cost" dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+                    fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
+                  <Bar yAxisId="cost" dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                    fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
+                  <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" name="Cost per 100 km"
+                    stroke={theme.palette.warning.main} strokeWidth={2} dot={false} isAnimationActive={chartAnimation} />
+                </ComposedChart>
               </ResponsiveContainer>
             </Box>
           </Card>
-        </Box>
 
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getFuelBoxSx(theme, 'electric', { borderOnly: true }) }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Energy Consumption Trend
-            </Typography>
-            <Box sx={chartBodySx}>
-              <ResponsiveContainer>
-                <AreaChart data={data.weekly_trend || []}>
-                  <defs>
-                    <linearGradient id="analytics-energy-gradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={theme.palette.primary.main} stopOpacity={0.8} />
-                      <stop offset="95%" stopColor={theme.palette.primary.main} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                  <XAxis
-                    dataKey="week"
-                    tickFormatter={(value) => new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
-                  />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    formatter={(value) => [`${formatNumber(value)} kWh`, 'Energy']}
-                    labelFormatter={(value) => new Date(value).toLocaleDateString()}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="energy"
-                    stroke={theme.palette.primary.main}
-                    strokeWidth={3}
-                    fillOpacity={1}
-                    fill="url(#analytics-energy-gradient)"
-                    dot={{ r: 0 }}
-                    activeDot={{ r: 5, strokeWidth: 0, fill: theme.palette.secondary.main }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Box>
-          </Card>
-        </Box>
-      </Box>
-
-      <SectionHeading
-        title="Vehicle Comparison"
-        description="Heavy per-vehicle comparisons live here, separated from the dashboard overview."
-      />
-      <Box sx={analyticsRowSx}>
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getCategoryBoxSx(theme, 'other') }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Operating Cost per Vehicle
-            </Typography>
-            <Box sx={chartBodySx}>
-              <ResponsiveContainer>
-                <BarChart data={data.vehicle_stats || []} layout="vertical">
-                  <defs>
-                    <linearGradient id="analytics-cost-gradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor={alpha(theme.palette.secondary.main, 0.55)} />
-                      <stop offset="100%" stopColor={theme.palette.secondary.main} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="4 10" horizontal={false} stroke={theme.palette.divider} />
-                  <XAxis type="number" hide />
-                  <YAxis dataKey="name" type="category" width={96} axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <Tooltip formatter={(value) => [`${formatNumber(value)} HUF`, 'Operating cost']} contentStyle={tooltipStyle} />
-                  <Bar dataKey="total_cost" fill="url(#analytics-cost-gradient)" radius={[0, 8, 8, 0]} barSize={24} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Box>
-          </Card>
-        </Box>
-
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getCategoryBoxSx(theme, 'other') }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Cost per 100 km by Vehicle
-            </Typography>
-            <Box sx={chartBodySx}>
-              <ResponsiveContainer>
-                <BarChart data={distanceVehicles} layout="vertical">
-                  <defs>
-                    <linearGradient id="analytics-distance-gradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor={alpha(theme.palette.success.main, 0.5)} />
-                      <stop offset="100%" stopColor={theme.palette.primary.main} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="4 10" horizontal={false} stroke={theme.palette.divider} />
-                  <XAxis type="number" hide />
-                  <YAxis dataKey="name" type="category" width={96} axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <Tooltip
-                    formatter={(value, _name, entry) => [
-                      `${formatNumber(value)} HUF / 100 km`,
-                      `${formatNumber(entry?.payload?.distance_km || 0)} km tracked`,
-                    ]}
-                    contentStyle={tooltipStyle}
-                  />
-                  <Bar dataKey="cost_per_100km" fill="url(#analytics-distance-gradient)" radius={[0, 8, 8, 0]} barSize={24} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Box>
-          </Card>
-        </Box>
-      </Box>
-
-      <SectionHeading
-        title="Cost Structure"
-        description="Expense category mix and energy distribution stay together so cost structure reads as one coherent section."
-      />
-      <Box sx={analyticsRowSx}>
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getCategoryBoxSx(theme, 'other') }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Expense Breakdown
-            </Typography>
-            <Box
-              sx={{
-                ...chartBodySx,
-                display: 'grid',
-                gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1.15fr) minmax(220px, 0.85fr)' },
-                gap: 2,
-              }}
-            >
-              <Box sx={{ minHeight: 300 }}>
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie
-                      data={data.expense_categories || []}
-                      dataKey="total_amount"
-                      nameKey="category"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={54}
-                      outerRadius={88}
-                      paddingAngle={3}
-                      stroke={theme.palette.background.paper}
-                      strokeWidth={4}
-                    >
-                      {(data.expense_categories || []).map((entry, index) => (
-                        <Cell key={`expense-cell-${entry.category}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value) => `${formatNumber(value)} HUF`} labelFormatter={formatCategoryLabel} contentStyle={tooltipStyle} />
-                  </PieChart>
-                </ResponsiveContainer>
+          {/* Which car is cheapest to run, answered directly. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between"
+              alignItems={{ sm: 'flex-start' }} spacing={2} sx={{ mb: 1 }}>
+              <Box>
+                <Typography variant="h6" fontWeight={700}>Efficiency</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Ranked best first. {metric.note}
+                </Typography>
               </Box>
-              <Stack spacing={1.25} justifyContent="center">
-                {(data.expense_categories || []).map((category, index) => (
-                  <Box key={category.category} sx={{ ...getCategoryBoxSx(theme, category.category, { compact: true }) }}>
-                    <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
+              <ToggleButtonGroup exclusive size="small" value={metricKey}
+                onChange={(_, next) => next && setMetricKey(next)} aria-label="Efficiency metric">
+                <ToggleButton value="running">Cost to drive</ToggleButton>
+                <ToggleButton value="total">Total cost</ToggleButton>
+                <ToggleButton value="energy" disabled={!hasEnergyData}>Energy</ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+
+            {ranked.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                No distance recorded in this range, so this cannot be worked out yet. Add an odometer
+                reading to your sessions and it fills in.
+              </Typography>
+            ) : (
+              <Stack spacing={2} sx={{ mt: 2 }}>
+                {ranked.map((row, index) => (
+                  <Box key={row.id}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1} sx={{ mb: 0.5 }}>
                       <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                        <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: COLORS[index % COLORS.length] }} />
-                        <Box sx={{ minWidth: 0 }}>
-                          <Typography variant="body2" fontWeight="700" noWrap sx={{ textTransform: 'capitalize' }}>
-                            {formatCategoryLabel(category.category)}
-                          </Typography>
+                        <Typography variant="body2" fontWeight={700} noWrap>{row.name}</Typography>
+                        <Chip size="small" variant="outlined" label={row.fuel_type} />
+                        {index === 0 ? (
+                          <Chip size="small" color="success" label="Most efficient" />
+                        ) : (
                           <Typography variant="caption" color="text.secondary">
-                            {category.item_count} items
+                            +{Math.round(((row.value / ranked[0].value) - 1) * 100)}%
                           </Typography>
-                        </Box>
+                        )}
                       </Stack>
-                      <Typography variant="body2" fontWeight="800">
-                        {formatNumber(category.total_amount)} HUF
+                      <Typography variant="body2" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
+                        {metric.format(row.value)}
                       </Typography>
                     </Stack>
+                    <LinearProgress
+                      variant="determinate"
+                      value={(row.value / ranked[ranked.length - 1].value) * 100}
+                      sx={{
+                        height: 10,
+                        borderRadius: 5,
+                        '& .MuiLinearProgress-bar': {
+                          backgroundColor: index === 0 ? theme.palette.success.main : theme.palette.primary.main,
+                        },
+                      }}
+                    />
                   </Box>
                 ))}
+                {excludedCount > 0 ? (
+                  <Typography variant="caption" color="text.secondary">
+                    {excludedCount} vehicle{excludedCount === 1 ? '' : 's'} left out — no distance
+                    {metricKey === 'energy' ? ' or charging' : ''} recorded in this range.
+                  </Typography>
+                ) : null}
               </Stack>
-            </Box>
+            )}
           </Card>
-        </Box>
 
-        <Box sx={twoColItemSx}>
-          <Card sx={{ ...analyticsCardSx, ...getFuelBoxSx(theme, 'electric', { borderOnly: true }) }}>
-            <Typography variant="h6" fontWeight="700" sx={{ mb: 3 }}>
-              Energy by Vehicle
+          {/* Full detail, replacing two bar charts and three leaderboards. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>All figures</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Sort by any column to find the outlier.
             </Typography>
-            <Box
-              sx={{
-                ...chartBodySx,
-                display: 'grid',
-                gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1.15fr) minmax(220px, 0.85fr)' },
-                gap: 2,
-                alignItems: 'stretch',
-              }}
-            >
-              <Box sx={{ minHeight: 300 }}>
-                {energyVehicles.length ? (
-                  <ResponsiveContainer>
-                    <PieChart>
-                      <Pie
-                        data={energyVehicles}
-                        dataKey="total_energy"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={54}
-                        outerRadius={88}
-                        paddingAngle={3}
-                        stroke={theme.palette.background.paper}
-                        strokeWidth={4}
+            <TableContainer sx={{ overflowX: 'auto' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {COLUMNS.map((col) => (
+                      <TableCell
+                        key={col.id}
+                        align={col.numeric ? 'right' : 'left'}
+                        sortDirection={orderBy === col.id ? order : false}
+                        aria-sort={orderBy === col.id ? (order === 'asc' ? 'ascending' : 'descending') : 'none'}
                       >
-                        {energyVehicles.map((vehicle, index) => (
-                          <Cell key={`energy-cell-${vehicle.id}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => [`${formatNumber(value)} kWh`, 'Energy']} contentStyle={tooltipStyle} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: '100%', minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">
-                      No charge-capable vehicles with energy data yet.
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-              <Stack spacing={1.25} justifyContent="center">
-                {energyVehicles.map((vehicle, index) => (
-                  <Box
-                    key={vehicle.id}
-                    sx={{
-                      ...getFuelBoxSx(theme, vehicle.fuel_type, { compact: true, borderOnly: true }),
-                      display: 'grid',
-                      gridTemplateColumns: '14px minmax(0, 1fr) auto',
-                      gap: 1,
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: COLORS[index % COLORS.length], boxShadow: `0 0 12px ${alpha(COLORS[index % COLORS.length], 0.35)}` }} />
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="body2" fontWeight="700" noWrap>
-                        {vehicle.name}
+                        <TableSortLabel
+                          active={orderBy === col.id}
+                          direction={orderBy === col.id ? order : 'asc'}
+                          onClick={() => handleSort(col.id)}
+                        >
+                          {col.label}
+                        </TableSortLabel>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sortedVehicles.map((vehicle) => (
+                    <TableRow key={vehicle.id} hover>
+                      {COLUMNS.map((col) => (
+                        <TableCell key={col.id} align={col.numeric ? 'right' : 'left'} sx={{ whiteSpace: 'nowrap' }}>
+                          {col.id === 'name' ? (
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Typography variant="body2" fontWeight={700}>{vehicle.name}</Typography>
+                              <Chip size="small" variant="outlined" label={vehicle.fuel_type} />
+                            </Stack>
+                          ) : col.format(Number(vehicle[col.id] || 0))}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Card>
+
+          {/* Where the money goes. */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
+            <Card sx={{ p: 3, borderRadius: 4 }}>
+              <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Driving vs other costs</Typography>
+              <Stack spacing={2.5}>
+                {[
+                  { label: 'Driving spend', value: summary.session_cost_huf, pct: summary.session_share_pct,
+                    color: theme.palette.primary.main, hint: 'Charging and fuel' },
+                  { label: 'Other costs', value: summary.expense_cost_huf, pct: summary.expense_share_pct,
+                    color: theme.palette.secondary.main, hint: 'Insurance, maintenance, tax…' },
+                ].map((row) => (
+                  <Box key={row.label}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1} sx={{ mb: 0.5 }}>
+                      <Typography variant="body2" fontWeight={700}>{row.label}</Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                        {huf(row.value)} · {Math.round(row.pct || 0)}%
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'capitalize' }}>
-                        {vehicle.fuel_type}
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" fontWeight="800">
-                      {formatNumber(vehicle.total_energy)} kWh
-                    </Typography>
+                    </Stack>
+                    <LinearProgress variant="determinate" value={Math.min(100, Number(row.pct || 0))}
+                      sx={{ height: 10, borderRadius: 5, '& .MuiLinearProgress-bar': { backgroundColor: row.color } }} />
+                    <Typography variant="caption" color="text.secondary">{row.hint}</Typography>
                   </Box>
                 ))}
               </Stack>
-            </Box>
-          </Card>
-        </Box>
-      </Box>
+            </Card>
 
-      <SectionHeading
-        title="Vehicle Drilldown"
-        description="Use a focused vehicle panel for detailed history instead of repeating all metrics across the whole page."
-        action={
-          <FormControl size="small" sx={{ minWidth: 240 }}>
-            <InputLabel id="analytics-vehicle-select-label">Vehicle</InputLabel>
-            <Select
-              labelId="analytics-vehicle-select-label"
-              value={selectedVehicleId}
-              label="Vehicle"
-              disabled={loadingDrilldown || !(data.vehicle_stats || []).length}
-              onChange={(event) => setSelectedVehicleId(event.target.value)}
-            >
-              {(data.vehicle_stats || []).map((vehicle) => (
-                <MenuItem key={vehicle.id} value={String(vehicle.id)}>
-                  {vehicle.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        }
-      />
-      <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4, mb: 0.5 }}>
-        {loadingDrilldown ? (
-          <Box sx={{ minHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CircularProgress size={28} />
-          </Box>
-        ) : drilldownError ? (
-          <Box sx={{ minHeight: 280, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 1.25 }}>
-            <Chip size="small" label="Vehicle detail" variant="outlined" />
-            <Typography variant="h6" fontWeight="700">
-              Vehicle drilldown unavailable
-            </Typography>
-            <Typography color="text.secondary">
-              {drilldownError}
-            </Typography>
-            <Button variant="outlined" onClick={reloadDrilldown}>
-              Retry
-            </Button>
-          </Box>
-        ) : drilldown && selectedVehicle ? (
-          <Stack spacing={3}>
-            <Box sx={{ ...getFuelBoxSx(theme, selectedVehicle.fuel_type, { borderOnly: true }), p: 2.5, borderRadius: 4 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
-                <Box>
-                  <Typography variant="h6" fontWeight="800">
-                    {drilldown.vehicle?.name}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ textTransform: 'capitalize' }}>
-                    {drilldown.vehicle?.fuel_type} • {drilldown.vehicle?.make} {drilldown.vehicle?.model}
-                  </Typography>
-                </Box>
-                <Chip label={rangeKey.toUpperCase()} size="small" variant="outlined" />
-              </Stack>
-            </Box>
-
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card sx={{ ...summaryCardSx, minHeight: 130 }}>
-                  <Typography variant="subtitle2" color="text.secondary">Total Cost</Typography>
-                  <Typography variant="h5" fontWeight="800" sx={{ mt: 1 }}>{formatNumber(drilldown.summary?.total_cost_huf)} HUF</Typography>
-                </Card>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card sx={{ ...summaryCardSx, minHeight: 130 }}>
-                  <Typography variant="subtitle2" color="text.secondary">Distance</Typography>
-                  <Typography variant="h5" fontWeight="800" sx={{ mt: 1 }}>{formatNumber(drilldown.summary?.distance_km)} km</Typography>
-                </Card>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card sx={{ ...summaryCardSx, minHeight: 130 }}>
-                  <Typography variant="subtitle2" color="text.secondary">Session Spend</Typography>
-                  <Typography variant="h5" fontWeight="800" sx={{ mt: 1 }}>{formatNumber(drilldown.summary?.session_cost_huf)} HUF</Typography>
-                </Card>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
-                <Card sx={{ ...summaryCardSx, minHeight: 130 }}>
-                  <Typography variant="subtitle2" color="text.secondary">Cost / 100 km</Typography>
-                  <Typography variant="h5" fontWeight="800" sx={{ mt: 1 }}>{formatNumber(drilldown.summary?.avg_cost_per_100km)} HUF</Typography>
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Grid container spacing={3}>
-              <Grid item xs={12} lg={7}>
-                <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4, height: '100%' }}>
-                  <Typography variant="h6" fontWeight="700" sx={{ mb: 2.5 }}>
-                    Vehicle Monthly Trend
-                  </Typography>
-                  <Box sx={{ width: '100%', height: 280 }}>
+            <Card sx={{ p: 3, borderRadius: 4 }}>
+              <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Cost categories</Typography>
+              {categories.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">No costs recorded in this range.</Typography>
+              ) : (
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+                  <Box sx={{ width: 168, height: 168, flexShrink: 0 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={drilldown.monthly_trend || []}>
-                        <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                        <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                        <Tooltip
-                          contentStyle={tooltipStyle}
-                          formatter={(value, key) => [`${formatNumber(value)} HUF`, key === 'session_cost_huf' ? 'Driving spend' : 'Extra costs']}
-                        />
-                        <Bar dataKey="session_cost_huf" stackId="cost" fill={theme.palette.primary.main} radius={[10, 10, 0, 0]} />
-                        <Bar dataKey="expense_cost_huf" stackId="cost" fill={theme.palette.secondary.main} radius={[10, 10, 0, 0]} />
-                      </BarChart>
+                      <PieChart>
+                        <Pie data={categories} dataKey="total_amount" nameKey="category"
+                          cx="50%" cy="50%" innerRadius={48} outerRadius={78} paddingAngle={3}
+                          stroke={theme.palette.background.paper} strokeWidth={3}
+                          isAnimationActive={chartAnimation}>
+                          {categories.map((entry, index) => (
+                            <Cell key={entry.category} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={tooltipStyle} formatter={(value) => huf(value)}
+                          labelFormatter={formatCategoryLabel} />
+                      </PieChart>
                     </ResponsiveContainer>
                   </Box>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} lg={5}>
-                <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4, height: '100%' }}>
-                  <Typography variant="h6" fontWeight="700" sx={{ mb: 2.5 }}>
-                    Vehicle Expense Mix
-                  </Typography>
-                  {(drilldown.expense_categories || []).length ? (
-                    <Stack spacing={1.25}>
-                      {drilldown.expense_categories.map((category) => (
-                        <Box key={category.category} sx={{ ...getCategoryBoxSx(theme, category.category, { compact: true }) }}>
-                          <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
-                            <Box>
-                              <Typography variant="body2" fontWeight="700" sx={{ textTransform: 'capitalize' }}>
-                                {formatCategoryLabel(category.category)}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {category.item_count} items
-                              </Typography>
-                            </Box>
-                            <Typography variant="body2" fontWeight="800">
-                              {formatNumber(category.total_amount)} HUF
-                            </Typography>
-                          </Stack>
-                        </Box>
-                      ))}
-                    </Stack>
-                  ) : (
-                    <Box sx={{ minHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Typography color="text.secondary">
-                        No extra expenses for this vehicle in the selected range.
-                      </Typography>
-                    </Box>
-                  )}
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4 }}>
-              <Typography variant="h6" fontWeight="700" sx={{ mb: 2.5 }}>
-                Recent Vehicle Events
-              </Typography>
-              {(drilldown.recent_events || []).length ? (
-                <Stack divider={<Divider flexItem />} spacing={0}>
-                  {drilldown.recent_events.map((event, index) => (
-                    <Box
-                      key={`${event.occurred_at}-${index}`}
-                      sx={{
-                        py: 1.75,
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: 1.5,
-                        flexDirection: { xs: 'column', sm: 'row' },
-                      }}
-                    >
-                      <Box>
-                        <Typography variant="body2" fontWeight="700" sx={{ textTransform: 'capitalize' }}>
-                          {event.category}
+                  <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
+                    {categories.map((entry, index) => (
+                      <Stack key={entry.category} direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                          <Box sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                            backgroundColor: COLORS[index % COLORS.length] }} />
+                          <Typography variant="body2" noWrap>{formatCategoryLabel(entry.category)}</Typography>
+                        </Stack>
+                        <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                          {Math.round((Number(entry.total_amount) / categoryTotal) * 100)}%
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {new Date(event.occurred_at).toLocaleDateString()} • {event.event_type}
-                        </Typography>
-                        {event.description ? (
-                          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>
-                            {event.description}
-                          </Typography>
-                        ) : null}
-                      </Box>
-                      <Stack alignItems={{ xs: 'flex-start', sm: 'flex-end' }} spacing={0.25}>
-                        <Typography variant="body2" fontWeight="800">
-                          {formatNumber(event.total_cost)} HUF
-                        </Typography>
-                        {event.energy_kwh ? (
-                          <Typography variant="caption" color="text.secondary">
-                            {formatNumber(event.energy_kwh)} kWh
-                          </Typography>
-                        ) : null}
                       </Stack>
-                    </Box>
-                  ))}
+                    ))}
+                  </Stack>
                 </Stack>
-              ) : (
-                <Typography color="text.secondary">
-                  No events found for this vehicle in the selected range.
-                </Typography>
               )}
             </Card>
-          </Stack>
-        ) : (
-          <Box sx={{ minHeight: 180, display: 'flex', alignItems: 'center' }}>
-            <Typography color="text.secondary">
-              No vehicle data available for drilldown.
-            </Typography>
           </Box>
-        )}
-      </Card>
 
-      <SectionHeading
-        title="Leaderboards"
-        description="A compact closing section for quick ranking instead of repeating full fleet rows."
-      />
-      <Box sx={{ ...analyticsRowSx, mb: 0 }}>
-        <Box sx={threeColItemSx}>
-          <LeaderboardCard
-            title="Highest Total Cost"
-            items={totalCostLeaderboard}
-            metricKey="total_cost"
-            metricUnit="HUF"
-            emptyText="No cost data available yet."
-          />
-        </Box>
-        <Box sx={threeColItemSx}>
-          <LeaderboardCard
-            title="Highest Cost per 100 km"
-            items={efficiencyLeaderboard}
-            metricKey="cost_per_100km"
-            metricUnit="HUF"
-            emptyText="No normalized distance data available yet."
-          />
-        </Box>
-        <Box sx={threeColItemSx}>
-          <LeaderboardCard
-            title="Highest Extra Cost Load"
-            items={extraCostLeaderboard}
-            metricKey="expense_cost"
-            metricUnit="HUF"
-            emptyText="No extra cost data available yet."
-          />
-        </Box>
-      </Box>
+          {/* Per-vehicle detail. */}
+          <Card sx={{ p: 3, borderRadius: 4 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between"
+              alignItems={{ sm: 'center' }} spacing={2} sx={{ mb: 2 }}>
+              <Box>
+                <Typography variant="h6" fontWeight={700}>Single vehicle</Typography>
+                <Typography variant="body2" color="text.secondary">Same range, one vehicle at a time.</Typography>
+              </Box>
+              <TextField select size="small" label="Vehicle" value={selectedVehicleId}
+                onChange={(e) => setSelectedVehicleId(e.target.value)} sx={{ minWidth: 200 }}>
+                {(data.vehicle_stats || []).map((v) => (
+                  <MenuItem key={v.id} value={String(v.id)}>{v.name}</MenuItem>
+                ))}
+              </TextField>
+            </Stack>
+
+            {!drilldown ? (
+              <Typography variant="body2" color="text.secondary">Pick a vehicle to see its detail.</Typography>
+            ) : (
+              <>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2 }}>
+                  <Figure label="Total cost" value={huf(drilldown.summary?.total_cost_huf)} color={theme.palette.secondary.main} />
+                  <Figure label="Distance" value={km(drilldown.summary?.distance_km)} color={theme.palette.primary.main} />
+                  <Figure label="Per 100 km" value={huf(drilldown.summary?.avg_cost_per_100km)} color={theme.palette.warning.main} />
+                  <Figure label="Records" value={String(drilldown.summary?.total_records || 0)} color={theme.palette.success.main} />
+                </Box>
+
+                <Divider sx={{ mb: 2 }} />
+
+                <Box sx={{ width: '100%', height: isMobile ? 200 : 260 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={drilldown.monthly_trend || []} margin={{ left: 4, right: 4 }}>
+                      <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
+                      <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
+                        tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                      <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
+                        tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                      <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [huf(value), name]} />
+                      <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
+                      <Bar dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+                        fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
+                      <Bar dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                        fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </Box>
+              </>
+            )}
+          </Card>
+        </>
+      )}
     </Box>
   );
 };
