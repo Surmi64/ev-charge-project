@@ -16,12 +16,21 @@ spec:
         app: ev-frontend
     spec:
       containers:
-      - name: frontend
-        image: registry.lan:32000/ev-frontend:latest
-        ports:
-        - containerPort: 80
-        env:
-        - name: VITE_API_URL
-          value: "http://ev-backend:5555"
+        - name: frontend
+          # Must match where CI actually pushes (.github/workflows/frontend-ci.yaml).
+          # This previously pointed at registry.lan:32000, which nothing publishes to.
+          image: 192.168.0.242:32000/ev-frontend:latest
+          ports:
+            - containerPort: 80
+          # No env here on purpose. VITE_API_URL is a build-time variable that Vite
+          # inlines during `npm run build`; setting it at runtime does nothing. The
+          # app calls relative /api/... paths, which nginx.conf proxies to the
+          # "backend" Service.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
       imagePullSecrets:
-      - name: registry-auth
+        - name: registry-auth

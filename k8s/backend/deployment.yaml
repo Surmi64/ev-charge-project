@@ -16,26 +16,53 @@ spec:
         app: ev-backend
     spec:
       containers:
-      - name: backend
-        image: 192.168.0.242:32000/ev-backend:latest
-        ports:
-        - containerPort: 5555
+        - name: backend
+          image: 192.168.0.242:32000/ev-backend:latest
+          ports:
+            # The image runs uvicorn on 4646 (see backend/Dockerfile).
+            - containerPort: 4646
+          # env belongs to the container, not the pod spec. It previously sat as a
+          # sibling of `containers`, which is not a valid PodSpec field, so the
+          # manifest was rejected and no configuration reached the app at all.
+          env:
+            - name: APP_ENV
+              value: "production"
+            # Required: outside development, config.py refuses to start without this
+            # and also rejects the known insecure defaults. Create the secret first:
+            #   kubectl create secret generic garageos-secrets \
+            #     --from-literal=JWT_SECRET_KEY="$(openssl rand -hex 32)"
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garageos-secrets
+                  key: JWT_SECRET_KEY
+            - name: DB_HOST
+              value: "192.168.0.111"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: "ev_charger"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: DB_USER
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: DB_PASS
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 4646
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4646
+            initialDelaySeconds: 20
+            periodSeconds: 20
       imagePullSecrets:
-      - name: registry-auth
-      env:
-      - name: DB_HOST
-        value: "192.168.0.111"
-      - name: DB_PORT
-        value: "5432"
-      - name: DB_NAME
-        value: "ev_charger"
-      - name: DB_USER
-        valueFrom:
-          secretKeyRef:
-            name: db-credentials
-            key: DB_USER
-      - name: DB_PASS
-        valueFrom:
-          secretKeyRef:
-            name: db-credentials
-            key: DB_PASS
+        - name: registry-auth
