@@ -10,6 +10,18 @@
     <meta name="apple-mobile-web-app-title" content="GarageOS" />
     <link rel="apple-touch-icon" href="/bolt.svg" />
     <link rel="manifest" href="/manifest.json" />
+
+    <!-- Loaded here rather than through an @import in index.css. The @import cost
+         three serial round trips (css -> font css -> font files), so the swap landed
+         long after first paint and visibly reflowed every heading.
+         display=optional means the browser uses the fallback if the font is not ready
+         in time and then does NOT swap, so there is no reflow either way. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Rajdhani:wght@500;600;700&display=optional"
+    />
     <title>GarageOS</title>
   </head>
   <body>

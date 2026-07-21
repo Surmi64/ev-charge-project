@@ -1,6 +1,6 @@
 .app-shell {
   position: relative;
-  min-height: 100vh;
+  min-height: 100dvh;
   isolation: isolate;
 }
 
@@ -74,7 +74,7 @@
 
 .auth-shell {
   position: relative;
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -104,3 +104,42 @@
   filter: blur(12px);
   pointer-events: none;
 }
+
+/* Entrance animation
+ *
+ * Purely opacity and transform, so nothing here can move the layout: the space is
+ * already reserved by the skeletons. The point is to soften the skeleton-to-content
+ * hand-off, which reads as a jump even when the two occupy identical space.
+ *
+ * `both` fill mode holds the element invisible through its delay, otherwise a
+ * staggered child flashes at full opacity before its turn. The reduced-motion rule
+ * in index.css collapses the duration to ~0, which lands every element on its final
+ * state immediately — no extra handling needed here.
+ */
+@keyframes garageos-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.fade-in {
+  animation: garageos-fade-in 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* Direct children cascade in. Capped at six steps so a long page does not end up
+   waiting on a visibly late final card. */
+.stagger > * {
+  animation: garageos-fade-in 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 45ms; }
+.stagger > *:nth-child(3) { animation-delay: 90ms; }
+.stagger > *:nth-child(4) { animation-delay: 135ms; }
+.stagger > *:nth-child(5) { animation-delay: 180ms; }
+.stagger > *:nth-child(n + 6) { animation-delay: 210ms; }
