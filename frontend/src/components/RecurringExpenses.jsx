@@ -28,6 +28,8 @@ import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
+import { useAuth } from '../context/useAuth';
+import { createFormatters } from '../utils/units';
 import { EXPENSE_CATEGORIES } from '../utils/expenseCategories';
 import { CardListSkeleton } from './SectionSkeletons';
 
@@ -41,7 +43,7 @@ const EMPTY = {
   vehicle_id: '',
   category: 'insurance',
   amount: '',
-  currency: 'HUF',
+  currency: '',
   frequency: 'yearly',
   next_due_date: new Date().toISOString().slice(0, 10),
   description: '',
@@ -64,6 +66,8 @@ const dueLabel = (days) => {
 
 const RecurringExpenses = () => {
   const theme = useTheme();
+  const { user } = useAuth();
+  const fmt = useMemo(() => createFormatters(user), [user]);
   const [reminders, setReminders] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -122,7 +126,7 @@ const RecurringExpenses = () => {
       vehicle_id: form.vehicle_id === '' ? null : Number(form.vehicle_id),
       category: form.category,
       amount: Number(form.amount),
-      currency: form.currency || 'HUF',
+      currency: form.currency || fmt.currency,
       frequency: form.frequency,
       next_due_date: form.next_due_date,
       description: form.description || null,
@@ -191,7 +195,7 @@ const RecurringExpenses = () => {
         <Card sx={{ p: 4, borderRadius: 4, textAlign: 'center' }}>
           <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>No recurring costs yet</Typography>
           <Typography color="text.secondary" sx={{ mb: 2 }}>
-            Add insurance, road tax or a service interval and GarageOS will remind you.
+            Add insurance, road tax or a service interval and Mileage will remind you.
           </Typography>
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>Add reminder</Button>
         </Card>
@@ -213,7 +217,7 @@ const RecurringExpenses = () => {
                       {!reminder.is_active ? <Chip size="small" variant="outlined" label="Paused" /> : null}
                     </Stack>
                     <Typography variant="body2" color="text.secondary">
-                      {Number(reminder.amount).toLocaleString()} {reminder.currency} · {reminder.frequency} · {vehicleName(reminder.vehicle_id)}
+                      {fmt.money(reminder.amount)} · {reminder.frequency} · {vehicleName(reminder.vehicle_id)}
                     </Typography>
                   </Box>
 

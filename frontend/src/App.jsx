@@ -14,13 +14,14 @@ import './App.css';
 import Sidebar from './components/Sidebar';
 import MobileNav from './components/MobileNav';
 import SubscriptionBanner from './components/SubscriptionBanner';
+import Onboarding from './components/Onboarding';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import Vehicles from './components/Vehicles';
 import Analytics from './components/Analytics';
 import Profile from './components/Profile';
 import Activity from './components/Activity';
-import UserManagement from './components/UserManagement';
+import AdminPage from './components/AdminPage';
 import PasswordRecoveryPage from './components/PasswordRecoveryPage';
 import Billing from './components/Billing';
 import { useAuth } from './context/useAuth';
@@ -28,13 +29,19 @@ import { useAuth } from './context/useAuth';
 
 
 const PrivateRoute = ({ children }) => {
-  const { authenticated, loading } = useAuth();
+  const { authenticated, loading, user } = useAuth();
 
   if (loading) {
     return <Box display="flex" justifyContent="center" alignItems="center" height="100dvh"><CircularProgress /></Box>;
   }
 
-  return authenticated ? children : <Navigate to="/login" replace />;
+  if (!authenticated) return <Navigate to="/login" replace />;
+
+  // Shown once per account, on any route. Skipping sets the same flag as finishing,
+  // so this never comes back.
+  if (user && !user.onboarded_at) return <Onboarding />;
+
+  return children;
 };
 
 const AdminRoute = ({ children }) => {
@@ -404,7 +411,9 @@ function App() {
                             <Route path="/analytics" element={<Analytics />} />
                             <Route path="/account" element={<Profile />} />
                             <Route path="/billing" element={<Billing />} />
-                            <Route path="/admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
+                            <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+              {/* The old bookmark keeps working, landing on the tab it used to be. */}
+              <Route path="/admin/users" element={<Navigate to="/admin?tab=users" replace />} />
                           </Routes>
                         </Box>
                       </Box>

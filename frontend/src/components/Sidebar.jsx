@@ -15,7 +15,6 @@ import {
   Dashboard as DashIcon, 
   DirectionsCar as CarIcon, 
   Timeline as ActivityIcon,
-  EvStation as ChargeIcon, 
   BarChart as AnalyticsIcon,
   Person as PersonIcon,
   CreditCard as BillingIcon,
@@ -26,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
+import OdometerWordmark from './OdometerWordmark';
 
 const Sidebar = ({ toggleTheme, themeMode }) => {
   const navigate = useNavigate();
@@ -47,7 +47,9 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
   ];
 
   if (user?.role === 'admin') {
-    settingsItems.push({ text: 'Users', icon: <AdminIcon />, path: '/admin/users' });
+    // Flagged red and sitting apart from the ordinary settings: it reaches every
+    // account on the instance, not just this one.
+    settingsItems.push({ text: 'Admin', icon: <AdminIcon />, path: '/admin', danger: true });
   }
 
   const isMenuItemSelected = (path) => location.pathname === path;
@@ -81,22 +83,8 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
           boxShadow: `0 0 14px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.12)}`,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <Box sx={{ 
-          width: 52,
-          height: 52,
-          borderRadius: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          border: '1px solid',
-          borderColor: 'primary.main',
-          background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.18 : 0.12)}, ${alpha(theme.palette.secondary.main, theme.palette.mode === 'dark' ? 0.18 : 0.1)})`,
-          boxShadow: `0 0 10px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`
-        }}>
-          <ChargeIcon sx={{ color: 'primary.main', fontSize: 26 }} />
-        </Box>
-        <Typography variant="h5" sx={{ lineHeight: 0.9 }}>GarageOS</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <OdometerWordmark />
         </Box>
       </Box>
 
@@ -139,7 +127,18 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
               <ListItemButton
                 onClick={() => navigate(item.path)}
                 selected={isMenuItemSelected(item.path)}
-                sx={{ borderRadius: 1, py: 1.1 }}
+                sx={{
+                  borderRadius: 1,
+                  py: 1.1,
+                  ...(item.danger ? {
+                    color: 'error.main',
+                    '& .MuiListItemIcon-root': { color: 'error.main' },
+                    '& .MuiListItemText-primary': { fontWeight: 700 },
+                    '&.Mui-selected': { bgcolor: alpha(theme.palette.error.main, theme.palette.mode === 'dark' ? 0.16 : 0.1) },
+                    '&.Mui-selected:hover': { bgcolor: alpha(theme.palette.error.main, theme.palette.mode === 'dark' ? 0.22 : 0.14) },
+                    '&:hover': { bgcolor: alpha(theme.palette.error.main, theme.palette.mode === 'dark' ? 0.1 : 0.07) },
+                  } : {}),
+                }}
               >
                 <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
                 <ListItemText primary={item.text} />

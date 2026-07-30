@@ -1,14 +1,14 @@
 services:
   db:
     image: postgres:15
-    container_name: garageos-postgres
+    container_name: mileage-postgres
     restart: always
     environment:
       POSTGRES_USER: ev_user
       POSTGRES_PASSWORD: ev_password
       POSTGRES_DB: ev_charger
     volumes:
-      - /opt/garageos_postgres_data:/var/lib/postgresql/data
+      - /opt/mileage_postgres_data:/var/lib/postgresql/data
       - ./sql/phase0_bootstrap.sql:/docker-entrypoint-initdb.d/001-phase0-bootstrap.sql:ro
     ports:
       - "5432:5432"
@@ -20,7 +20,7 @@ services:
 
   backend:
     build: ./backend
-    container_name: garageos-backend
+    container_name: mileage-backend
     restart: always
     environment:
       APP_ENV: development
@@ -33,8 +33,8 @@ services:
       # DB_USER above stays the owner and is used for migrations.
       # Auto-promote this address to admin on sign-up. Leave unset in production.
       BOOTSTRAP_ADMIN_EMAIL: surmi64@gmail.com
-      DB_APP_USER: garageos_app
-      DB_APP_PASS: garageos_app_password
+      DB_APP_USER: mileage_app
+      DB_APP_PASS: mileage_app_password
       JWT_SECRET_KEY: change-me-in-real-env
       CORS_ALLOW_ORIGINS: http://localhost:4242,http://127.0.0.1:4242,http://localhost:4646,http://127.0.0.1:4646
     ports:
@@ -54,7 +54,7 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: http://localhost:4646
-    container_name: garageos-frontend
+    container_name: mileage-frontend
     restart: always
     ports:
       - "4242:80"

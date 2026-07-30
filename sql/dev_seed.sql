@@ -1,3 +1,8 @@
+-- Demo data for the account named below.
+--
+-- All dates are relative to NOW() on purpose. They used to be fixed timestamps in
+-- March 2026, which meant that a few months later every seeded record fell outside
+-- the current month and a freshly seeded dashboard read zero.
 BEGIN;
 
 WITH admin_user AS (
@@ -10,11 +15,11 @@ INSERT INTO vehicles (
     user_id, name, make, model, fuel_type, year, license_plate, battery_capacity_kwh,
     tank_capacity_liters, starting_odometer_km, color_hex, notes, is_default
 )
-SELECT admin_user.id, 'GarageOS Demo EV', 'Tesla', 'Model 3', 'electric', 2023, 'GO-EV-001', 62.0,
+SELECT admin_user.id, 'Mileage Demo EV', 'Tesla', 'Model 3', 'electric', 2023, 'GO-EV-001', 62.0,
        NULL, 18000.0, '#C2185B', 'Demo seed vehicle for EV charging scenarios', FALSE
 FROM admin_user
 WHERE NOT EXISTS (
-    SELECT 1 FROM vehicles WHERE user_id = admin_user.id AND name = 'GarageOS Demo EV'
+    SELECT 1 FROM vehicles WHERE user_id = admin_user.id AND name = 'Mileage Demo EV'
 );
 
 WITH admin_user AS (
@@ -27,11 +32,11 @@ INSERT INTO vehicles (
     user_id, name, make, model, fuel_type, year, license_plate, battery_capacity_kwh,
     tank_capacity_liters, starting_odometer_km, color_hex, notes, is_default
 )
-SELECT admin_user.id, 'GarageOS Demo Hybrid', 'Toyota', 'Corolla Touring Sports', 'hybrid', 2022, 'GO-HY-001', 1.3,
+SELECT admin_user.id, 'Mileage Demo Hybrid', 'Toyota', 'Corolla Touring Sports', 'hybrid', 2022, 'GO-HY-001', 1.3,
        43.0, 48200.0, '#455A64', 'Demo seed vehicle for mixed charging and fueling scenarios', FALSE
 FROM admin_user
 WHERE NOT EXISTS (
-    SELECT 1 FROM vehicles WHERE user_id = admin_user.id AND name = 'GarageOS Demo Hybrid'
+    SELECT 1 FROM vehicles WHERE user_id = admin_user.id AND name = 'Mileage Demo Hybrid'
 );
 
 UPDATE vehicles
@@ -42,7 +47,7 @@ SET
         color_hex = '#C2185B',
         notes = 'Demo seed vehicle for EV charging scenarios'
 WHERE user_id = (SELECT id FROM users WHERE LOWER(email) = LOWER('surmi64@gmail.com') LIMIT 1)
-    AND name = 'GarageOS Demo EV'
+    AND name = 'Mileage Demo EV'
     AND (
         battery_capacity_kwh IS DISTINCT FROM 62.0
         OR starting_odometer_km IS DISTINCT FROM 18000.0
@@ -58,7 +63,7 @@ SET
         color_hex = '#455A64',
         notes = 'Demo seed vehicle for mixed charging and fueling scenarios'
 WHERE user_id = (SELECT id FROM users WHERE LOWER(email) = LOWER('surmi64@gmail.com') LIMIT 1)
-    AND name = 'GarageOS Demo Hybrid'
+    AND name = 'Mileage Demo Hybrid'
     AND (
         battery_capacity_kwh IS DISTINCT FROM 1.3
         OR tank_capacity_liters IS DISTINCT FROM 43.0
@@ -76,35 +81,35 @@ WITH admin_user AS (
 demo_ev AS (
     SELECT id, user_id
     FROM vehicles
-    WHERE name = 'GarageOS Demo EV' AND user_id = (SELECT id FROM admin_user)
+    WHERE name = 'Mileage Demo EV' AND user_id = (SELECT id FROM admin_user)
     LIMIT 1
 ),
 demo_hybrid AS (
     SELECT id, user_id
     FROM vehicles
-    WHERE name = 'GarageOS Demo Hybrid' AND user_id = (SELECT id FROM admin_user)
+    WHERE name = 'Mileage Demo Hybrid' AND user_id = (SELECT id FROM admin_user)
     LIMIT 1
 )
 INSERT INTO charging_sessions (
     user_id, vehicle_id, session_type, start_time, end_time, kwh, fuel_liters,
-    cost_huf, source, battery_level_start, battery_level_end, odometer, notes
+    cost_amount, source, battery_level_start, battery_level_end, odometer, notes
 )
-SELECT demo_ev.user_id, demo_ev.id, 'charging', TIMESTAMPTZ '2026-03-28T18:15:00+00:00', TIMESTAMPTZ '2026-03-28T19:05:00+00:00', 24.80, NULL,
+SELECT demo_ev.user_id, demo_ev.id, 'charging', (date_trunc('month', NOW()) + INTERVAL '2 days 18 hours 15 minutes'), (date_trunc('month', NOW()) + INTERVAL '2 days 19 hours 5 minutes'), 24.80, NULL,
        4680, 'dev_seed', 22, 79, 18240.4, 'Demo seed: evening home charging'
 FROM demo_ev
 WHERE NOT EXISTS (
     SELECT 1
     FROM charging_sessions
-    WHERE user_id = demo_ev.user_id AND vehicle_id = demo_ev.id AND source = 'dev_seed' AND start_time = TIMESTAMPTZ '2026-03-28T18:15:00+00:00'
+    WHERE user_id = demo_ev.user_id AND vehicle_id = demo_ev.id AND source = 'dev_seed' AND start_time = (date_trunc('month', NOW()) + INTERVAL '2 days 18 hours 15 minutes')
 )
 UNION ALL
-SELECT demo_hybrid.user_id, demo_hybrid.id, 'fueling', TIMESTAMPTZ '2026-03-29T09:30:00+00:00', TIMESTAMPTZ '2026-03-29T09:42:00+00:00', NULL, 34.20,
+SELECT demo_hybrid.user_id, demo_hybrid.id, 'fueling', (date_trunc('month', NOW()) + INTERVAL '3 days 9 hours 30 minutes'), (date_trunc('month', NOW()) + INTERVAL '3 days 9 hours 42 minutes'), NULL, 34.20,
        22140, 'dev_seed', NULL, NULL, 48755.1, 'Demo seed: hybrid motorway refuel'
 FROM demo_hybrid
 WHERE NOT EXISTS (
     SELECT 1
     FROM charging_sessions
-    WHERE user_id = demo_hybrid.user_id AND vehicle_id = demo_hybrid.id AND source = 'dev_seed' AND start_time = TIMESTAMPTZ '2026-03-29T09:30:00+00:00'
+    WHERE user_id = demo_hybrid.user_id AND vehicle_id = demo_hybrid.id AND source = 'dev_seed' AND start_time = (date_trunc('month', NOW()) + INTERVAL '3 days 9 hours 30 minutes')
 );
 
 WITH admin_user AS (
@@ -116,17 +121,17 @@ WITH admin_user AS (
 demo_ev AS (
     SELECT id, user_id
     FROM vehicles
-    WHERE name = 'GarageOS Demo EV' AND user_id = (SELECT id FROM admin_user)
+    WHERE name = 'Mileage Demo EV' AND user_id = (SELECT id FROM admin_user)
     LIMIT 1
 ),
 demo_hybrid AS (
     SELECT id, user_id
     FROM vehicles
-    WHERE name = 'GarageOS Demo Hybrid' AND user_id = (SELECT id FROM admin_user)
+    WHERE name = 'Mileage Demo Hybrid' AND user_id = (SELECT id FROM admin_user)
     LIMIT 1
 )
 INSERT INTO expenses (user_id, vehicle_id, category, amount, currency, date, description)
-SELECT demo_ev.user_id, demo_ev.id, 'insurance', 18200, 'HUF', DATE '2026-03-01', 'Demo seed: quarterly EV insurance'
+SELECT demo_ev.user_id, demo_ev.id, 'insurance', 18200, 'HUF', (date_trunc('month', NOW())::date), 'Demo seed: quarterly EV insurance'
 FROM demo_ev
 WHERE NOT EXISTS (
     SELECT 1
@@ -134,7 +139,7 @@ WHERE NOT EXISTS (
     WHERE user_id = demo_ev.user_id AND vehicle_id = demo_ev.id AND category = 'insurance' AND description = 'Demo seed: quarterly EV insurance'
 )
 UNION ALL
-SELECT demo_hybrid.user_id, demo_hybrid.id, 'maintenance', 38750, 'HUF', DATE '2026-03-15', 'Demo seed: annual service and filters'
+SELECT demo_hybrid.user_id, demo_hybrid.id, 'maintenance', 38750, 'HUF', (date_trunc('month', NOW())::date + 14), 'Demo seed: annual service and filters'
 FROM demo_hybrid
 WHERE NOT EXISTS (
     SELECT 1
@@ -152,11 +157,11 @@ BEGIN
             next_due_date, description, is_active
         )
         SELECT demo_ev.user_id, demo_ev.id, 'insurance', 18200, 'HUF', 'quarterly',
-               DATE '2026-06-01', 'Demo seed: EV insurance renewal reminder', TRUE
+               (CURRENT_DATE + 21), 'Demo seed: EV insurance renewal reminder', TRUE
         FROM (
             SELECT id, user_id
             FROM vehicles
-            WHERE name = 'GarageOS Demo EV'
+            WHERE name = 'Mileage Demo EV'
               AND user_id = (SELECT id FROM users WHERE LOWER(email) = LOWER('surmi64@gmail.com') LIMIT 1)
             LIMIT 1
         ) demo_ev
@@ -171,11 +176,11 @@ BEGIN
             next_due_date, description, is_active
         )
         SELECT demo_hybrid.user_id, demo_hybrid.id, 'tax', 14500, 'HUF', 'yearly',
-               DATE '2026-09-15', 'Demo seed: hybrid vehicle tax reminder', TRUE
+               (CURRENT_DATE + 60), 'Demo seed: hybrid vehicle tax reminder', TRUE
         FROM (
             SELECT id, user_id
             FROM vehicles
-            WHERE name = 'GarageOS Demo Hybrid'
+            WHERE name = 'Mileage Demo Hybrid'
               AND user_id = (SELECT id FROM users WHERE LOWER(email) = LOWER('surmi64@gmail.com') LIMIT 1)
             LIMIT 1
         ) demo_hybrid
@@ -202,7 +207,7 @@ SELECT
     CASE WHEN cs.session_type = 'fueling' THEN 'Fueling' ELSE 'Charging' END,
     cs.start_time,
     cs.end_time,
-    cs.cost_huf,
+    cs.cost_amount,
     'HUF',
     cs.odometer,
     cs.source,

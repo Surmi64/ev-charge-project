@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-GarageOS — a personal vehicle operations ledger (charging, fueling, expenses, ownership cost analytics). FastAPI + raw psycopg2 backend, Vite + React 19 + MUI frontend, PostgreSQL 17.
+Mileage — a vehicle cost tracker for mixed fleets. Records charging, fueling and every ownership cost (insurance, tax, maintenance, tolls) across electric, hybrid, petrol and diesel vehicles, and reports what each actually costs to run. Multi-tenant SaaS: EUR 5/month or 50/year after a 30 day trial.
 
-The repo is mid-refactor. `PHASE_0_REFACTOR_PLAN.md`, `IMPLEMENTATION_BACKLOG.md`, and `MICRO_SAAS_PLATFORM_PLAN.md` describe the intended direction; read them before large changes, but verify claims against code — some findings listed there are already fixed.
+FastAPI + raw psycopg2 backend, Vite + React 19 + MUI frontend, PostgreSQL 17.
+
+`MICRO_SAAS_PLATFORM_PLAN.md`, `IMPLEMENTATION_BACKLOG.md` and `PHASE_0_REFACTOR_PLAN.md` describe intent, but they predate a lot of this — verify against code before trusting them.
 
 ## Commands
 
@@ -14,27 +16,21 @@ The repo is mid-refactor. `PHASE_0_REFACTOR_PLAN.md`, `IMPLEMENTATION_BACKLOG.md
 
 ```bash
 docker compose -f docker-compose-dev.yaml up --build   # db:5435, backend:4646, frontend:4242
-bash scripts/smoke-dev.sh                              # health + auth + protected-endpoint smoke test
-bash scripts/seed-dev.sh                               # idempotent demo data for surmi64@gmail.com
+bash scripts/smoke-dev.sh                              # health + auth + protected-endpoint check
+bash scripts/seed-dev.sh                               # idempotent demo data
 ```
 
-### Backend standalone
-
-```bash
-pip install -r backend/requirements.txt
-export DB_HOST=localhost DB_PORT=5435 DB_NAME=ev_charger DB_USER=ev_user DB_PASS=ev_password
-export APP_ENV=development
-uvicorn backend.main:app --host 0.0.0.0 --port 4646 --reload
-```
+Containers are named `mileage-{postgres,backend,frontend}-dev`. Renaming the compose project changes the volume name too, which resets the dev database.
 
 ### Frontend
 
 ```bash
 cd frontend && npm install
-npm run dev      # vite, port 4242
-npm run lint     # eslint (the only automated check in the repo)
+npm run lint     # eslint — currently clean, keep it that way
 npm run build
 ```
+
+`npm run dev` will not reach the API: `vite.config.js` proxies `/api` to `http://backend:4646`, a Docker service hostname. Change the target or work through the compose stack.
 
 ### Migrations (Alembic, from repo root)
 
@@ -43,61 +39,84 @@ alembic upgrade head
 alembic revision -m "describe change"
 ```
 
-There are two Alembic configs: `alembic.ini` (repo root, `script_location = backend/alembic`, defaults to the dev DB on `localhost:5435`) and `backend/alembic.ini` (used inside the container as `/app/alembic.ini`). `DB_*` env vars override the URL when set.
+`alembic.ini` at the repo root points at the dev DB on `localhost:5435`; `backend/alembic.ini` is the container copy. `DB_*` env vars override the URL.
+
+**`sql/phase0_bootstrap.sql` is the full head-state schema and stamps `alembic_version` itself.** A fresh database is therefore already migrated and `alembic upgrade head` is a no-op. Any schema change needs updating in both places, including the stamp version. Do not run `alembic stamp head` against a database created some other way — check what actually exists first.
 
 ### Testing
 
-There is no test suite — no pytest, no vitest, no test files. CI (`.github/workflows/`) only builds and pushes Docker images to a self-hosted registry; it runs no lint or tests. `scripts/smoke-dev.sh` is the closest thing to an integration test. If you add tests, you are establishing the convention.
+There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and CI only builds images. If you add tests you are setting the convention.
+
+For UI work, a headless Chromium is available at `/snap/bin/chromium` and `puppeteer-core` drives it. Layout shift, loading flicker and unit formatting have all been verified that way — lint and build catch none of them.
 
 ## Architecture
 
-### Dual-write event model (the most important invariant)
+### Tenant isolation is enforced by the database
 
-Writes go to the **legacy tables** — `charging_sessions` and `expenses`. Reads for Activity, Dashboard, and Analytics go to **`vehicle_events`**, a denormalized unified read model.
+Row level security on `vehicles`, `charging_sessions`, `expenses`, `vehicle_events`, `recurring_expense_reminders` and `subscriptions`. Policies match on `current_setting('app.user_id')`, which `billing.get_tenant_db` sets once per request.
 
-These are kept in sync explicitly in `backend/vehicle_events.py`:
+- **Every endpoint touching user data must depend on `get_tenant_db`, not `get_db`.** The policy uses `NULLIF(...)`, so a connection that never sets the tenant matches nothing and returns zero rows rather than everyone's.
+- **The app connects as `DB_APP_USER` (`mileage_app`), which must not be a superuser and must not hold `BYPASSRLS`.** Either one silently disables every policy. `DB_USER` stays the owner and is used for migrations only.
+- Admin endpoints deliberately use `get_db`, so `app.user_id` is unset and an admin cannot read another account's records even with a query that omits a `WHERE` clause. `subscriptions` carries an extra `app.admin` escape because plan state is what user management needs.
 
-- `sync_session_to_vehicle_event(db, session_id)` / `sync_expense_to_vehicle_event(db, expense_id)` — upsert on `(legacy_source, legacy_id)`
-- `delete_vehicle_event_by_legacy(db, legacy_source, legacy_id)`
-- `backfill_vehicle_events(db)` — bulk reconcile; called on every insights request
+The auth tables (`users`, `user_sessions`, `password_reset_tokens`, `auth_audit_logs`) are excluded: login has to read them before any identity exists.
 
-**Any new write path to `charging_sessions` or `expenses` must call the matching sync/delete helper before `db.commit()`, or the row will be invisible in the UI.** See `backend/routers/sessions.py` for the pattern.
+### Dual-write event model
 
-`sql/target_v3_schema.sql` is the long-term direction: `vehicle_events` becomes the source of truth and the legacy tables go away.
+Writes go to `charging_sessions` and `expenses`. Reads for Records, Dashboard and Analytics come from `vehicle_events`, a denormalized read model. `backend/vehicle_events.py` keeps them in step:
 
-### Runtime schema introspection
+- `sync_session_to_vehicle_event` / `sync_expense_to_vehicle_event` — upsert on `(legacy_source, legacy_id)`
+- `delete_vehicle_event_by_legacy`
+- `backfill_vehicle_events` — bulk reconcile, **not called from any request path**
 
-`backend/db.py` exposes `column_exists`, `table_exists`, and `get_vehicle_column`. Routers call these on each request to tolerate databases at different migration states — e.g. `get_vehicle_column(db)` returns `vehicle_id_ref` or `vehicle_id` and is interpolated into f-string SQL. Feature code guards optional columns the same way (`is_archived` in `vehicle_rules.py`). Preserve this pattern when touching queries that use it; the column name is the only interpolated value — all user data goes through psycopg2 parameters.
+**Any new write to `charging_sessions` or `expenses` must call the matching sync/delete helper before `db.commit()`, or the row never appears in the UI.** See `routers/sessions.py`.
+
+The backfill used to run on every read, which cost a full scan of both tables per request and achieved nothing — those endpoints never commit, so the rows were discarded each time. It is now reserved for data written directly to the database. `sql/target_v3_schema.sql` is the long-term direction, where `vehicle_events` becomes the source of truth.
+
+### Subscriptions
+
+`backend/billing.py` owns plan state. New accounts get a 30 day trial; `require_write_access` gates every mutating endpoint and answers **402** once it lapses. Reads and CSV export are deliberately never gated, so a lapsed account keeps access to its own data.
+
+No payment provider is connected. The `provider*` columns exist for one, and an admin activates plans through `PATCH /admin/subscriptions/{user_id}`.
+
+### Units and currency
+
+Distance is stored in kilometres and volume in litres; the client converts for display, which is why `_km` and `_kwh` suffixes on API fields are accurate and worth keeping.
+
+**Currency is a label, not a conversion.** Amounts are stored exactly as entered. Changing the account currency relabels future entries and leaves history alone — converting would need the exchange rate on each entry's original date. `frontend/src/utils/units.js` is the only place that formats money, distance or volume; do not format them inline.
+
+Cost per 100 km converts by *dividing* by the distance factor, since 100 miles is the longer trip.
 
 ### Backend layout
 
 - `main.py` — app assembly, CORS, request-ID middleware, structured JSON exception handlers
-- `routers/` — `auth`, `admin`, `vehicles`, `expenses`, `sessions`, `activity`, `insights`, `health`
-- `config.py` — env-driven; refuses to start outside development without a non-default `JWT_SECRET_KEY`
-- `vehicle_rules.py` — fuel-type business rules (electric ⇒ charging only, petrol/diesel ⇒ fueling only, hybrid ⇒ both) plus payload normalization and ownership checks
-- `logging_utils.py` — `log_event` structured logging
+- `billing.py` — subscription state, `get_tenant_db`, `require_write_access`
+- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights`, `health`
+- `config.py` — env-driven; refuses to start outside development without a non-default `JWT_SECRET_KEY`, and keeps the superseded GarageOS default on the rejection list
+- `vehicle_rules.py` — fuel-type rules (electric ⇒ charging, petrol/diesel ⇒ fueling, hybrid ⇒ both) plus payload normalization and ownership checks
 
-Every module uses a `try: from backend.X ... except ModuleNotFoundError: from X` import shim, because the container runs with `/app` as the working directory while local dev runs from the repo root. Match this in new modules.
+Every module uses a `try: from backend.X ... except ModuleNotFoundError: from X` shim, because the container runs from `/app` while local dev runs from the repo root. Match it in new modules.
 
-Routers depend on `get_current_user_id` and scope every query by `user_id` — user isolation is enforced in the SQL `WHERE` clause, not by a middleware layer.
+If a `try` block can raise `HTTPException` — usually by calling a validator inside it — it needs `except HTTPException: raise` before the generic `except`. Without that, a 400 or 404 surfaces as a 500, because `HTTPException` subclasses `Exception`. Handlers that validate before opening the `try` do not need the clause, which is why the codebase has both shapes.
 
-### Auth
+### Runtime schema introspection
 
-JWT access token (HS256, 12h default) plus an opaque refresh token stored SHA-256-hashed in `user_sessions` (30d default). `auth_audit_logs` records auth events; `auth_rate_limit.py` throttles attempts. Roles are `user` / `admin`; admin routes live in `routers/admin.py` and are gated frontend-side by `AdminRoute` in `App.jsx`.
+`db.py` exposes `column_exists`, `table_exists` and `get_vehicle_column`, called per request to tolerate databases at different migration states. `get_vehicle_column` returns `vehicle_id_ref` or `vehicle_id` and is interpolated into f-string SQL — that column name is the only interpolated value, and all user data goes through psycopg2 parameters.
 
-### Frontend
+There is no runtime DDL left. The schema comes from migrations, and the app role has no `CREATE` privilege, so a new `ensure_*` table helper would fail.
 
-- `context/AuthContext.jsx` holds token state, persists to `localStorage`, refreshes on a 10-minute interval, and retries `401`s once via `/api/auth/refresh`. Consume via `useAuth()` (`context/useAuth.jsx`) — never read `localStorage` directly in components.
-- All components `fetch` **relative `/api/...` paths** with a manual `Authorization: Bearer` header. There is no API client module and `VITE_API_URL` is not read anywhere in `src/` despite being set in the compose files.
-- `/api` is proxied by nginx (`frontend/nginx.conf`) in the built image, and by the Vite dev proxy in development. **The Vite proxy targets `http://backend:4646`, a Docker service hostname** — running `npm run dev` on the host will fail to reach the API unless you change that target in `vite.config.js`.
-- Routes are lazy-loaded and wrapped in `PrivateRoute`/`AdminRoute`. The MUI theme is defined inline in `App.jsx` (dark by default, industrial/neon styling); theme mode persists to the user record via `PATCH /api/auth/me`.
+## Frontend
 
-### Database bootstrap
-
-`sql/phase0_bootstrap.sql` is mounted into `docker-entrypoint-initdb.d` and only runs on a **fresh volume**. After schema changes, either add an Alembic revision or `docker compose -f docker-compose-dev.yaml down -v` to re-init. `sql/dev_seed.sql` is seed data only and is deliberately outside the migration path.
+- **`utils/api.js` is the only way to call the API.** `apiFetch` attaches the token and retries once through a refresh on 401. The refresh is single-flighted because the endpoint *rotates* the refresh token — two concurrent refreshes log the user out. Never read `localStorage` directly in a component.
+- `context/AuthContext.jsx` holds user and subscription state and consumes the same refresh implementation.
+- Routes are imported directly, not lazily. Page chunks were a few kB against 220 kB of MUI and Recharts, and each navigation paid for them with a Suspense fallback that flickered.
+- `components/RecordDialog.jsx` is the single entry point for creating and editing both sessions and costs. Records lives at `/activity`, with the tab in the URL (`?tab=recurring`).
+- The MUI theme is inline in `App.jsx`. **Light mode was added late and every contrast value there was measured** — check any colour change against 4.5:1 for text and 3:1 for chart data before shipping it. `utils/chartColors.js` and `utils/categoryVisuals.js` hold per-theme palettes for that reason.
+- Loading placeholders go through `utils/useDelayedLoading.js`: nothing shows for 220 ms, and once shown it stays 320 ms. Skeletons in `SectionSkeletons.jsx` mirror their pages card for card — if a page layout changes, change the skeleton with it or the swap will reflow.
+- `prefers-reduced-motion` is handled in three places: a CSS rule, MUI transition durations, and `isAnimationActive` on every Recharts series. Recharts animates in JS and ignores CSS.
 
 ## Conventions
 
-- Backend uses single quotes for strings and raw SQL via `cur.execute` with `%s` parameters; no ORM (SQLAlchemy is present only for Alembic).
-- Mutating router handlers wrap work in `try/except`, re-raise `HTTPException`, and `db.rollback()` on other exceptions.
-- Currency defaults to `HUF` throughout.
+- Backend uses single quotes and raw SQL via `cur.execute` with `%s` parameters. No ORM — SQLAlchemy is present only for Alembic.
+- `BOOTSTRAP_ADMIN_EMAIL` is the only way an account becomes admin automatically, and it is empty by default.
+- Money, distance and volume are formatted through `createFormatters(user)`, never inline.

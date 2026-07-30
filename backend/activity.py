@@ -1,9 +1,9 @@
 from typing import Optional
 
 try:
-    from backend.db import table_exists
+    from backend.db import column_exists, table_exists
 except ModuleNotFoundError:
-    from db import table_exists
+    from db import column_exists, table_exists
 
 
 def get_activity_feed(
@@ -13,6 +13,7 @@ def get_activity_feed(
     activity_type: Optional[str] = None,
     vehicle_id: Optional[int] = None,
     search: Optional[str] = None,
+    exclude_archived: bool = False,
 ):
     # No backfill here: every write path (sessions, expenses, CSV import) already
     # syncs into vehicle_events, and dev_seed.sql inserts them directly. Running it
@@ -38,6 +39,16 @@ def get_activity_feed(
         search_value = f'%{search}%'
         params.extend([search_value, search_value, search_value])
 
+    # Off by default: Records is the user's own history and keeps showing an archived
+    # vehicle's entries. The dashboard widget asks for the live fleet only. NOT EXISTS
+    # rather than a join, so account-wide rows with a NULL vehicle_id survive.
+    if exclude_archived and column_exists(db, 'vehicles', 'is_archived'):
+        filters.append(
+            'NOT EXISTS (SELECT 1 FROM vehicles archived_v'
+            ' WHERE archived_v.id = combined_activity.vehicle_id'
+            ' AND archived_v.is_archived = TRUE)'
+        )
+
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
     params.append(limit)
 
@@ -51,7 +62,7 @@ def get_activity_feed(
                 ve.legacy_source::text AS legacy_source,
                 CASE WHEN ve.event_type IN ('charging', 'fueling') THEN 'session' ELSE 'expense' END::text AS activity_type,
                 ve.occurred_at,
-                ve.total_cost AS amount_huf,
+                ve.total_cost AS amount,
                 COALESCE(ve.expense_category, ve.event_type)::text AS category,
                 ve.vehicle_id::bigint AS vehicle_id,
                 COALESCE(v.name, CONCAT(v.make, ' ', v.model), 'All vehicles')::text AS vehicle_name,
@@ -80,7 +91,7 @@ def get_activity_feed(
             'can_delete': row['legacy_source'] in {'charging_session', 'expense'},
             'activity_type': row['activity_type'],
             'occurred_at': row['occurred_at'].isoformat() if row.get('occurred_at') else None,
-            'amount_huf': float(row['amount_huf'] or 0),
+            'amount': float(row['amount'] or 0),
             'category': row['category'],
             'vehicle_id': row.get('vehicle_id'),
             'vehicle_name': row['vehicle_name'],
@@ -136,7 +147,7 @@ def get_activity_export_rows(
                 COALESCE(ve.expense_category, ve.event_type)::text AS category,
                 ve.occurred_at,
                 ve.ended_at,
-                ve.total_cost AS amount_huf,
+                ve.total_cost AS amount,
                 ve.currency::text AS currency,
                 ve.vehicle_id::bigint AS vehicle_id,
                 COALESCE(v.name, CONCAT(v.make, ' ', v.model), 'All vehicles')::text AS vehicle_name,

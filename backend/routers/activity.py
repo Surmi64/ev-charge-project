@@ -28,7 +28,7 @@ CSV_COLUMNS = [
     'category',
     'occurred_at',
     'ended_at',
-    'amount_huf',
+    'amount',
     'currency',
     'vehicle_id',
     'vehicle_name',
@@ -157,7 +157,7 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
         vehicle_id = resolve_vehicle_id(row, db, user_id, required=True)
         start_time = parse_datetime_value(row.get('occurred_at'), 'occurred_at', required=True)
         end_time = parse_datetime_value(row.get('ended_at'), 'ended_at')
-        amount_huf = parse_decimal(row.get('amount_huf'), 'amount_huf', required=True)
+        amount = parse_decimal(row.get('amount'), 'amount', required=True)
         energy_kwh = parse_decimal(row.get('energy_kwh'), 'energy_kwh')
         fuel_liters = parse_decimal(row.get('fuel_liters'), 'fuel_liters')
         odometer_km = parse_decimal(row.get('odometer_km'), 'odometer_km')
@@ -171,7 +171,7 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
             f"""
             INSERT INTO charging_sessions (
                 user_id, {vehicle_column}, session_type, start_time, end_time, kwh, fuel_liters,
-                cost_huf, source, battery_level_start, battery_level_end, odometer, notes, created_at
+                cost_amount, source, battery_level_start, battery_level_end, odometer, notes, created_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id;
@@ -184,7 +184,7 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
                 end_time,
                 energy_kwh,
                 fuel_liters,
-                amount_huf,
+                amount,
                 source,
                 battery_level_start,
                 battery_level_end,
@@ -199,7 +199,7 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
     expense_category = category or 'other'
     vehicle_id = resolve_vehicle_id(row, db, user_id, required=False)
     expense_date = parse_date_value(row.get('occurred_at'), 'occurred_at', required=True)
-    amount = parse_decimal(row.get('amount_huf'), 'amount_huf', required=True)
+    amount = parse_decimal(row.get('amount'), 'amount', required=True)
     currency = normalize_text(row.get('currency')) or 'HUF'
 
     cur.execute(
@@ -244,7 +244,7 @@ def export_activity_csv(
                 'category': row.get('category'),
                 'occurred_at': row['occurred_at'].isoformat() if row.get('occurred_at') else '',
                 'ended_at': row['ended_at'].isoformat() if row.get('ended_at') else '',
-                'amount_huf': float(row.get('amount_huf') or 0),
+                'amount': float(row.get('amount') or 0),
                 'currency': row.get('currency') or 'HUF',
                 'vehicle_id': row.get('vehicle_id') or '',
                 'vehicle_name': row.get('vehicle_name') or '',
@@ -263,7 +263,7 @@ def export_activity_csv(
     return Response(
         content=content,
         media_type='text/csv',
-        headers={'Content-Disposition': 'attachment; filename=garageos-activity-export.csv'},
+        headers={'Content-Disposition': 'attachment; filename=mileage-activity-export.csv'},
     )
 
 

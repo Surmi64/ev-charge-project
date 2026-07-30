@@ -33,7 +33,7 @@ def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depend
             kwh,
             kwh AS energy_kwh,
             fuel_liters,
-            cost_huf,
+            cost_amount,
             source,
             battery_level_start,
             battery_level_end,
@@ -80,13 +80,13 @@ def update_charging_session(session_id: str, session: ChargingSessionCreate, use
             f"""
             UPDATE charging_sessions
             SET {vehicle_column} = %s, session_type = %s, start_time = %s, end_time = %s,
-                kwh = %s, fuel_liters = %s, cost_huf = %s, battery_level_start = %s,
+                kwh = %s, fuel_liters = %s, cost_amount = %s, battery_level_start = %s,
                 battery_level_end = %s, source = %s, notes = %s, odometer = %s
             WHERE id = %s AND user_id = %s;
             """,
             (
                 session.vehicle_id, session.session_type, session.start_time, session.end_time,
-                session.kwh, session.fuel_liters, session.cost_huf, session.battery_level_start,
+                session.kwh, session.fuel_liters, session.cost_amount, session.battery_level_start,
                 session.battery_level_end, session.source, session.notes, session.odometer, session_id, user_id,
             ),
         )
@@ -111,14 +111,14 @@ def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(
             f"""
             INSERT INTO charging_sessions
             (user_id, {vehicle_column}, session_type, start_time, end_time, kwh, fuel_liters,
-             cost_huf, source, battery_level_start, battery_level_end,
+             cost_amount, source, battery_level_start, battery_level_end,
              notes, odometer, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id;
             """,
             (
                 user_id, session.vehicle_id, session.session_type, session.start_time, session.end_time,
-                session.kwh, session.fuel_liters, session.cost_huf,
+                session.kwh, session.fuel_liters, session.cost_amount,
                 session.source, session.battery_level_start, session.battery_level_end,
                 session.notes, session.odometer,
             ),

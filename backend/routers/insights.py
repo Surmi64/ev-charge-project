@@ -7,15 +7,15 @@ try:
     from backend.auth_utils import get_current_user_id
     from backend.billing import get_tenant_db, require_write_access
     from backend.db import get_db
+    from backend.forecast import build_forecast
     from backend.routers.vehicles import has_archive_support
-    from backend.vehicle_events import backfill_vehicle_events
 except ModuleNotFoundError:
     from activity import get_activity_feed
     from auth_utils import get_current_user_id
     from billing import get_tenant_db, require_write_access
     from db import get_db
+    from forecast import build_forecast
     from routers.vehicles import has_archive_support
-    from vehicle_events import backfill_vehicle_events
 
 router = APIRouter(tags=['insights'])
 
@@ -28,87 +28,85 @@ def _int(value) -> int:
     return int(value or 0)
 
 
+def _active_vehicle_clause(db, alias: str = 'v') -> str:
+    """Restrict a vehicles-based query to the active fleet.
+
+    Deleting a vehicle that has history archives it instead (see
+    routers/vehicles.delete_vehicle), and an archived vehicle is meant to be gone
+    from reporting -- both its own row and the totals it used to feed.
+    """
+    return f' AND {alias}.is_archived = FALSE' if has_archive_support(db) else ''
+
+
+def _active_events_predicate(db, column: str = 'vehicle_id') -> str:
+    """Predicate dropping events that belong to an archived vehicle. '' if unsupported.
+
+    NOT EXISTS rather than NOT IN because vehicle_events.vehicle_id is nullable --
+    the FK is ON DELETE SET NULL, so a hard-deleted vehicle leaves orphaned rows
+    behind, and NOT IN would evaluate to NULL and silently discard those as well.
+
+    Carries no bound parameter, so it can be appended to a filter list or spliced
+    into a WHERE clause without disturbing placeholder order.
+    """
+    if not has_archive_support(db):
+        return ''
+    return (
+        f'NOT EXISTS (SELECT 1 FROM vehicles archived_v'
+        f' WHERE archived_v.id = {column} AND archived_v.is_archived = TRUE)'
+    )
+
+
+def _active_events_clause(db, column: str = 'vehicle_id') -> str:
+    """`_active_events_predicate` as a suffix for an existing WHERE clause."""
+    predicate = _active_events_predicate(db, column)
+    return f' AND {predicate}' if predicate else ''
+
+
 def _get_previous_month(value: date) -> date:
     if value.month == 1:
         return date(value.year - 1, 12, 1)
     return date(value.year, value.month - 1, 1)
 
 
-def _serialize_monthly_row(row: dict) -> dict:
+_TREND_BUCKETS = frozenset({'day', 'week', 'month'})
+
+
+def _trend_bucket_for_range(normalized_range: str) -> str:
+    """How finely the cost-over-time chart is sliced for a given range.
+
+    A month of daily bars still reads; a year of them would not, and a quarter of
+    monthly bars is only three data points. Weeks bridge the two.
+    """
+    return {'30d': 'day', '90d': 'week'}.get(normalized_range, 'month')
+
+
+def _serialize_trend_row(row: dict) -> dict:
     total_cost = _float(row.get('total_cost'))
     total_distance_km = _float(row.get('total_distance_km'))
 
     return {
-        'month': row['month'],
+        'period': row['period'],
         'total_energy_kwh': _float(row.get('total_energy_kwh')),
-        'session_cost_huf': _float(row.get('session_cost')),
+        'session_cost': _float(row.get('session_cost')),
         'session_count': _int(row.get('session_count')),
-        'expense_cost_huf': _float(row.get('expense_cost')),
+        'expense_cost': _float(row.get('expense_cost')),
         'expense_count': _int(row.get('expense_count')),
         'total_distance_km': total_distance_km,
-        'total_cost_huf': total_cost,
+        'total_cost': total_cost,
         'avg_cost_per_100km': (total_cost / total_distance_km * 100) if total_distance_km > 0 else 0,
     }
-
-
-def _fetch_monthly_stats(cur, user_id: str) -> list[dict]:
-    cur.execute(
-        """
-        WITH monthly_event_stats AS (
-            SELECT
-                DATE_TRUNC('month', occurred_at) AS month_start,
-                COALESCE(SUM(CASE WHEN event_type = 'charging' THEN energy_kwh ELSE 0 END), 0) AS total_energy_kwh,
-                COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS session_cost,
-                COUNT(*) FILTER (WHERE event_type IN ('charging', 'fueling')) AS session_count,
-                COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS expense_cost,
-                COUNT(*) FILTER (WHERE event_type NOT IN ('charging', 'fueling')) AS expense_count
-            FROM vehicle_events
-            WHERE user_id = %s
-            GROUP BY DATE_TRUNC('month', occurred_at)
-        ),
-        monthly_distance AS (
-            SELECT
-                month_start,
-                COALESCE(SUM(distance_km), 0) AS total_distance_km
-            FROM (
-                SELECT
-                    vehicle_id,
-                    DATE_TRUNC('month', occurred_at) AS month_start,
-                    GREATEST(MAX(odometer_km) - MIN(odometer_km), 0) AS distance_km
-                FROM vehicle_events
-                WHERE user_id = %s AND odometer_km IS NOT NULL
-                GROUP BY vehicle_id, DATE_TRUNC('month', occurred_at)
-            ) per_vehicle_month
-            GROUP BY month_start
-        )
-        SELECT
-            TO_CHAR(monthly_event_stats.month_start, 'YYYY-MM') AS month,
-            monthly_event_stats.total_energy_kwh,
-            monthly_event_stats.session_cost,
-            monthly_event_stats.session_count,
-            monthly_event_stats.expense_cost,
-            monthly_event_stats.expense_count,
-            COALESCE(monthly_distance.total_distance_km, 0) AS total_distance_km,
-            monthly_event_stats.session_cost + monthly_event_stats.expense_cost AS total_cost
-        FROM monthly_event_stats
-        LEFT JOIN monthly_distance ON monthly_distance.month_start = monthly_event_stats.month_start
-        ORDER BY monthly_event_stats.month_start;
-        """,
-        (user_id, user_id),
-    )
-    return [_serialize_monthly_row(row) for row in cur.fetchall()]
 
 
 def _empty_period(month: str) -> dict:
     return {
         'month': month,
         'total_energy_kwh': 0,
-        'session_cost_huf': 0,
+        'session_cost': 0,
         'session_count': 0,
-        'expense_cost_huf': 0,
+        'expense_cost': 0,
         'expense_count': 0,
         'total_distance_km': 0,
-        'total_cost_huf': 0,
+        'total_cost': 0,
         'avg_cost_per_100km': 0,
     }
 
@@ -120,17 +118,19 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     # per request cost a full scan of both legacy tables on every read.
     # Use POST /admin/reconcile-vehicle-events for a one-off reconciliation.
     cur = db.cursor()
+    active_events = _active_events_clause(db)
+    active_vehicles = _active_vehicle_clause(db)
     cur.execute(
-        """
+        f"""
         WITH event_totals AS (
             SELECT
                 COALESCE(SUM(CASE WHEN event_type = 'charging' THEN energy_kwh ELSE 0 END), 0) AS total_energy_kwh,
-                COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS total_session_cost_huf,
+                COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS total_session_cost,
                 COUNT(*) FILTER (WHERE event_type IN ('charging', 'fueling')) AS total_sessions,
                 COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS total_expense_cost,
                 COUNT(*) FILTER (WHERE event_type NOT IN ('charging', 'fueling')) AS total_expenses
             FROM vehicle_events
-            WHERE user_id = %s
+            WHERE user_id = %s{active_events}
         ),
         vehicle_distance_stats AS (
             SELECT
@@ -142,24 +142,24 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 COALESCE(SUM(ve.total_cost), 0) AS total_cost
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s
+            WHERE v.user_id = %s{active_vehicles}
             GROUP BY v.id, v.starting_odometer_km
         ),
         distance_totals AS (
             SELECT
                 COALESCE(SUM(distance_km), 0) AS total_distance_km,
-                COALESCE(SUM(total_cost), 0) AS total_distance_cost_huf,
+                COALESCE(SUM(total_cost), 0) AS total_distance_cost,
                 COUNT(*) FILTER (WHERE distance_km > 0) AS vehicles_with_distance
             FROM vehicle_distance_stats
         )
         SELECT
             event_totals.total_energy_kwh,
-            event_totals.total_session_cost_huf,
+            event_totals.total_session_cost,
             event_totals.total_sessions,
             event_totals.total_expense_cost,
             event_totals.total_expenses,
             distance_totals.total_distance_km,
-            distance_totals.total_distance_cost_huf,
+            distance_totals.total_distance_cost,
             distance_totals.vehicles_with_distance
         FROM event_totals
         CROSS JOIN distance_totals;
@@ -168,7 +168,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     )
     totals = cur.fetchone() or {}
 
-    monthly_stats = _fetch_monthly_stats(cur, user_id)
+    monthly_stats = _fetch_monthly_stats(cur, user_id, db=db)
     monthly_stats_by_key = {row['month']: row for row in monthly_stats}
     current_month_start = date.today().replace(day=1)
     previous_month_start = _get_previous_month(current_month_start)
@@ -178,7 +178,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     previous_month = monthly_stats_by_key.get(previous_month_start.strftime('%Y-%m'), _empty_period(previous_month_start.strftime('%Y-%m')))
 
     cur.execute(
-        """
+        f"""
         WITH event_stats AS (
             SELECT
                 vehicle_id,
@@ -186,7 +186,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS session_cost,
                 COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS expense_cost
             FROM vehicle_events
-            WHERE user_id = %s AND vehicle_id IS NOT NULL
+            WHERE user_id = %s AND vehicle_id IS NOT NULL{active_events}
             GROUP BY vehicle_id
         ),
         odometer_stats AS (
@@ -198,7 +198,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 ) AS distance_km
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s
+            WHERE v.user_id = %s{active_vehicles}
             GROUP BY v.id, v.starting_odometer_km
         )
         SELECT
@@ -217,7 +217,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
         FROM vehicles v
         LEFT JOIN event_stats ON event_stats.vehicle_id = v.id
         LEFT JOIN odometer_stats ON odometer_stats.vehicle_id = v.id
-        WHERE v.user_id = %s
+        WHERE v.user_id = %s{active_vehicles}
         GROUP BY v.id, v.name, v.make, v.model, v.fuel_type, event_stats.total_energy, event_stats.session_cost, event_stats.expense_cost, odometer_stats.distance_km
         ORDER BY total_cost DESC, name ASC;
         """,
@@ -239,15 +239,15 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
         for row in vehicle_rows
     ]
 
-    recent_activity = get_activity_feed(db, user_id, limit=6)
+    recent_activity = get_activity_feed(db, user_id, limit=6, exclude_archived=True)
 
     cur.execute(
-        """
+        f"""
         SELECT
             COALESCE(expense_category, 'other') AS category,
             COALESCE(SUM(total_cost), 0) AS total_amount
         FROM vehicle_events
-        WHERE user_id = %s
+        WHERE user_id = %s{active_events}
           AND event_type NOT IN ('charging', 'fueling')
           AND occurred_at >= DATE_TRUNC('month', CURRENT_DATE)
           AND occurred_at < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
@@ -259,8 +259,11 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     )
     top_expense_category = cur.fetchone()
 
+    # A reminder tied to an archived vehicle is as retired as the vehicle. Ones with
+    # no vehicle at all are account-wide and stay.
+    active_reminders = _active_events_clause(db, 'r.vehicle_id')
     cur.execute(
-        """
+        f"""
         SELECT
             r.id,
             COALESCE(v.name, CONCAT(v.make, ' ', v.model)) AS vehicle_name,
@@ -271,7 +274,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             r.description
         FROM recurring_expense_reminders r
         LEFT JOIN vehicles v ON v.id = r.vehicle_id AND v.user_id = r.user_id
-        WHERE r.user_id = %s
+        WHERE r.user_id = %s{active_reminders}
           AND r.is_active = TRUE
           AND r.next_due_date <= CURRENT_DATE + INTERVAL '30 days'
         ORDER BY r.next_due_date ASC, r.created_at ASC
@@ -282,22 +285,22 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     upcoming_reminders = cur.fetchall()
 
     cur.execute(
-        """
+        f"""
         SELECT COUNT(*) AS overdue_count
-        FROM recurring_expense_reminders
-        WHERE user_id = %s AND is_active = TRUE AND next_due_date < CURRENT_DATE;
+        FROM recurring_expense_reminders r
+        WHERE r.user_id = %s{active_reminders}
+          AND r.is_active = TRUE
+          AND r.next_due_date < CURRENT_DATE;
         """,
         (user_id,),
     )
     overdue_reminders = _int((cur.fetchone() or {}).get('overdue_count'))
 
-    active_vehicle_filter = 'AND v.is_archived = FALSE' if has_archive_support(db) else ''
     cur.execute(
         f"""
         SELECT COUNT(*) AS inactive_vehicle_count
         FROM vehicles v
-        WHERE v.user_id = %s
-          {active_vehicle_filter}
+        WHERE v.user_id = %s{active_vehicles}
           AND NOT EXISTS (
               SELECT 1
               FROM vehicle_events ve
@@ -310,13 +313,13 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     )
     inactive_vehicle_count = _int((cur.fetchone() or {}).get('inactive_vehicle_count'))
 
-    total_session_cost_huf = _float(totals.get('total_session_cost_huf'))
+    total_session_cost = _float(totals.get('total_session_cost'))
     total_expense_cost = _float(totals.get('total_expense_cost'))
     total_sessions = _int(totals.get('total_sessions'))
     total_expenses = _int(totals.get('total_expenses'))
     total_distance_km = _float(totals.get('total_distance_km'))
-    total_distance_cost_huf = _float(totals.get('total_distance_cost_huf'))
-    avg_cost_per_100km = (total_distance_cost_huf / total_distance_km * 100) if total_distance_km > 0 else 0
+    total_distance_cost = _float(totals.get('total_distance_cost'))
+    avg_cost_per_100km = (total_distance_cost / total_distance_km * 100) if total_distance_km > 0 else 0
     top_cost_vehicles = sorted(vehicle_stats, key=lambda vehicle: (float(vehicle.get('total_cost') or 0), vehicle.get('name') or ''), reverse=True)[:3]
 
     # Each alert carries a stable id so the client can remember which ones the user
@@ -338,7 +341,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             'title': 'Inactive vehicles',
             'description': f'{inactive_vehicle_count} vehicle has no tracked activity in the last 45 days.',
         })
-    if previous_month['total_cost_huf'] > 0 and current_month['total_cost_huf'] > previous_month['total_cost_huf']:
+    if previous_month['total_cost'] > 0 and current_month['total_cost'] > previous_month['total_cost']:
         alerts.append({
             'id': f"cost-increase:{current_month['month']}",
             'level': 'warning',
@@ -355,9 +358,9 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
 
     return {
         'total_energy_kwh': _float(totals.get('total_energy_kwh')),
-        'total_cost_huf': total_session_cost_huf + total_expense_cost,
-        'total_session_cost_huf': total_session_cost_huf,
-        'total_expense_cost_huf': total_expense_cost,
+        'total_cost': total_session_cost + total_expense_cost,
+        'total_session_cost': total_session_cost,
+        'total_expense_cost': total_expense_cost,
         'total_distance_km': total_distance_km,
         'avg_cost_per_100km': avg_cost_per_100km,
         'vehicles_with_distance': _int(totals.get('vehicles_with_distance')),
@@ -368,8 +371,8 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
         'current_month': current_month,
         'previous_month': previous_month,
         'cost_composition': {
-            'session_cost_huf': current_month['session_cost_huf'],
-            'expense_cost_huf': current_month['expense_cost_huf'],
+            'session_cost': current_month['session_cost'],
+            'expense_cost': current_month['expense_cost'],
             'energy_kwh': current_month['total_energy_kwh'],
             'top_expense_category': {
                 'category': top_expense_category['category'],
@@ -381,6 +384,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             'electric_count': sum(1 for vehicle in vehicle_stats if vehicle.get('fuel_type') == 'electric'),
             'hybrid_count': sum(1 for vehicle in vehicle_stats if vehicle.get('fuel_type') == 'hybrid'),
             'combustion_count': sum(1 for vehicle in vehicle_stats if vehicle.get('fuel_type') in ('petrol', 'diesel')),
+            'hydrogen_count': sum(1 for vehicle in vehicle_stats if vehicle.get('fuel_type') == 'hydrogen'),
             'top_cost_vehicles': [
                 {
                     'id': vehicle['id'],
@@ -439,17 +443,44 @@ def _get_analytics_range_bounds(range_key: str) -> tuple[str, date | None, date]
     raise HTTPException(status_code=400, detail='Range must be one of: 30d, 90d, ytd, all')
 
 
-def _fetch_monthly_stats(cur, user_id: str, start_date: date | None = None, end_date: date | None = None, vehicle_id: int | None = None) -> list[dict]:
+def _fetch_trend_stats(
+    cur,
+    user_id: str,
+    db=None,
+    bucket: str = 'month',
+    start_date: date | None = None,
+    end_date: date | None = None,
+    vehicle_id: int | None = None,
+    exclude_archived: bool = True,
+) -> list[dict]:
+    # bucket is interpolated into DATE_TRUNC, so it is whitelisted rather than bound.
+    if bucket not in _TREND_BUCKETS:
+        raise ValueError(f'Unsupported trend bucket: {bucket!r}')
+
+    # exclude_archived is off for the single-vehicle drilldown: that view is reached
+    # by explicitly asking for one vehicle, so filtering it out would return an empty
+    # trend for an archived vehicle the caller named on purpose.
+    archived_clause = _active_events_clause(db) if (exclude_archived and db is not None) else ''
+
     event_filters = ['user_id = %s']
     event_params: list[object] = [user_id]
+    # Deliberately unbounded at the start: the odometer delta for the first bucket in
+    # range needs the last reading *before* the range, or that bucket reports zero km
+    # and its cost-per-100km collapses. Buckets outside the range are dropped after
+    # the deltas are worked out, by bucket_filters below.
     distance_filters = ['user_id = %s', 'odometer_km IS NOT NULL']
     distance_params: list[object] = [user_id]
+    bucket_filters: list[str] = []
+    bucket_params: list[object] = []
 
     if start_date is not None:
         event_filters.append('occurred_at >= %s')
-        distance_filters.append('occurred_at >= %s')
         event_params.append(start_date.isoformat())
-        distance_params.append(start_date.isoformat())
+        # Filters the event, not its bucket: a range starting mid-week must contribute
+        # the same events to distance as it does to cost, or the first bar's spend and
+        # its efficiency line describe different journeys.
+        bucket_filters.append('occurred_at >= %s')
+        bucket_params.append(start_date.isoformat())
 
     if end_date is not None:
         event_filters.append('occurred_at < %s')
@@ -463,51 +494,73 @@ def _fetch_monthly_stats(cur, user_id: str, start_date: date | None = None, end_
         event_params.append(vehicle_id)
         distance_params.append(vehicle_id)
 
+    # Appended rather than joined in: the clause is a bare NOT EXISTS with no
+    # placeholder, so it must not disturb the parameter ordering below.
+    event_where = ' AND '.join(event_filters) + archived_clause
+    distance_where = ' AND '.join(distance_filters) + archived_clause
+    bucket_where = (' AND ' + ' AND '.join(bucket_filters)) if bucket_filters else ''
+
     cur.execute(
         f"""
-        WITH monthly_event_stats AS (
+        WITH bucket_event_stats AS (
             SELECT
-                DATE_TRUNC('month', occurred_at) AS month_start,
+                DATE_TRUNC('{bucket}', occurred_at) AS bucket_start,
                 COALESCE(SUM(CASE WHEN event_type = 'charging' THEN energy_kwh ELSE 0 END), 0) AS total_energy_kwh,
                 COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS session_cost,
                 COUNT(*) FILTER (WHERE event_type IN ('charging', 'fueling')) AS session_count,
                 COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS expense_cost,
                 COUNT(*) FILTER (WHERE event_type NOT IN ('charging', 'fueling')) AS expense_count
             FROM vehicle_events
-            WHERE {' AND '.join(event_filters)}
-            GROUP BY DATE_TRUNC('month', occurred_at)
+            WHERE {event_where}
+            GROUP BY DATE_TRUNC('{bucket}', occurred_at)
         ),
-        monthly_distance AS (
+        -- Distance comes from per-event odometer deltas rather than MAX-MIN inside the
+        -- bucket. At day granularity a bucket usually holds a single reading, and
+        -- MAX-MIN would report zero km for it -- which would drag the cost-per-100km
+        -- line to nothing. A delta against the previous reading survives any bucket
+        -- size and also stops the gap between two buckets going missing.
+        odometer_deltas AS (
             SELECT
-                month_start,
-                COALESCE(SUM(distance_km), 0) AS total_distance_km
-            FROM (
-                SELECT
-                    vehicle_id,
-                    DATE_TRUNC('month', occurred_at) AS month_start,
-                    GREATEST(MAX(odometer_km) - MIN(odometer_km), 0) AS distance_km
-                FROM vehicle_events
-                WHERE {' AND '.join(distance_filters)}
-                GROUP BY vehicle_id, DATE_TRUNC('month', occurred_at)
-            ) per_vehicle_month
-            GROUP BY month_start
+                DATE_TRUNC('{bucket}', occurred_at) AS bucket_start,
+                occurred_at,
+                odometer_km - LAG(odometer_km) OVER (
+                    PARTITION BY vehicle_id ORDER BY occurred_at, id
+                ) AS delta_km
+            FROM vehicle_events
+            WHERE {distance_where}
+        ),
+        bucket_distance AS (
+            SELECT
+                bucket_start,
+                COALESCE(SUM(GREATEST(delta_km, 0)), 0) AS total_distance_km
+            FROM odometer_deltas
+            WHERE delta_km IS NOT NULL{bucket_where}
+            GROUP BY bucket_start
         )
         SELECT
-            TO_CHAR(monthly_event_stats.month_start, 'YYYY-MM') AS month,
-            monthly_event_stats.total_energy_kwh,
-            monthly_event_stats.session_cost,
-            monthly_event_stats.session_count,
-            monthly_event_stats.expense_cost,
-            monthly_event_stats.expense_count,
-            COALESCE(monthly_distance.total_distance_km, 0) AS total_distance_km,
-            monthly_event_stats.session_cost + monthly_event_stats.expense_cost AS total_cost
-        FROM monthly_event_stats
-        LEFT JOIN monthly_distance ON monthly_distance.month_start = monthly_event_stats.month_start
-        ORDER BY monthly_event_stats.month_start;
+            TO_CHAR(bucket_event_stats.bucket_start, 'YYYY-MM-DD') AS period,
+            bucket_event_stats.total_energy_kwh,
+            bucket_event_stats.session_cost,
+            bucket_event_stats.session_count,
+            bucket_event_stats.expense_cost,
+            bucket_event_stats.expense_count,
+            COALESCE(bucket_distance.total_distance_km, 0) AS total_distance_km,
+            bucket_event_stats.session_cost + bucket_event_stats.expense_cost AS total_cost
+        FROM bucket_event_stats
+        LEFT JOIN bucket_distance ON bucket_distance.bucket_start = bucket_event_stats.bucket_start
+        ORDER BY bucket_event_stats.bucket_start;
         """,
-        event_params + distance_params,
+        event_params + distance_params + bucket_params,
     )
-    return [_serialize_monthly_row(row) for row in cur.fetchall()]
+    return [_serialize_trend_row(row) for row in cur.fetchall()]
+
+
+def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
+    """Month buckets keyed 'YYYY-MM', which is what the dashboard looks up by."""
+    rows = _fetch_trend_stats(cur, user_id, bucket='month', **kwargs)
+    for row in rows:
+        row['month'] = row.pop('period')[:7]
+    return rows
 
 
 @router.get('/analytics/summary')
@@ -519,6 +572,11 @@ def get_analytics_summary(
     cur = db.cursor()
     normalized_range, start_date, end_date = _get_analytics_range_bounds(range_key)
 
+    # Archived vehicles are retired from reporting, so they drop out of every
+    # aggregate here as well as out of the per-vehicle breakdown below.
+    active_events = _active_events_predicate(db)
+    active_vehicles = _active_vehicle_clause(db)
+
     weekly_filters = ['user_id = %s', "event_type = 'charging'"]
     weekly_params: list[object] = [user_id]
     event_filters = ['user_id = %s', 'vehicle_id IS NOT NULL']
@@ -529,6 +587,14 @@ def get_analytics_summary(
     expense_params: list[object] = [user_id]
     avg_filters = ['user_id = %s', "event_type = 'charging'", 'energy_kwh IS NOT NULL', 'energy_kwh > 0']
     avg_params: list[object] = [user_id]
+
+    if active_events:
+        weekly_filters.append(active_events)
+        event_filters.append(active_events)
+        expense_filters.append(active_events)
+        avg_filters.append(active_events)
+        # join_filters needs nothing: odometer_stats drives off `vehicles`, which
+        # active_vehicles already narrows to the live fleet.
 
     if start_date is not None:
         start_value = start_date.isoformat()
@@ -592,7 +658,7 @@ def get_analytics_summary(
                 ) AS distance_km
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id{' AND ' + ' AND '.join(join_filters) if join_filters else ''}
-            WHERE v.user_id = %s
+            WHERE v.user_id = %s{active_vehicles}
             GROUP BY v.id, v.starting_odometer_km
         )
         SELECT
@@ -611,14 +677,17 @@ def get_analytics_summary(
         FROM vehicles v
         LEFT JOIN event_stats ON event_stats.vehicle_id = v.id
         LEFT JOIN odometer_stats ON odometer_stats.vehicle_id = v.id
-        WHERE v.user_id = %s
+        WHERE v.user_id = %s{active_vehicles}
         GROUP BY v.id, v.name, v.make, v.model, v.fuel_type, event_stats.total_energy, event_stats.session_cost, event_stats.expense_cost, odometer_stats.distance_km
         ORDER BY total_cost DESC, name ASC;
         """,
         event_params + join_params + [user_id, user_id],
     )
     vehicle_stats = cur.fetchall()
-    monthly_trend = _fetch_monthly_stats(cur, user_id, start_date=start_date, end_date=end_date)
+    trend_bucket = _trend_bucket_for_range(normalized_range)
+    trend = _fetch_trend_stats(
+        cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
+    )
 
     cur.execute(
         f"""
@@ -659,17 +728,18 @@ def get_analytics_summary(
         }
         for row in vehicle_stats
     ]
-    total_operating_cost_huf = sum(row['total_cost'] for row in serialized_vehicle_stats)
+    total_operating_cost = sum(row['total_cost'] for row in serialized_vehicle_stats)
     total_distance_km = sum(row['distance_km'] for row in serialized_vehicle_stats)
     total_energy_kwh = sum(row['total_energy'] for row in serialized_vehicle_stats)
-    session_cost_huf = sum(row['session_cost'] for row in serialized_vehicle_stats)
-    expense_cost_huf = sum(row['expense_cost'] for row in serialized_vehicle_stats)
-    avg_cost_per_100km = (total_operating_cost_huf / total_distance_km * 100) if total_distance_km > 0 else 0
+    session_cost = sum(row['session_cost'] for row in serialized_vehicle_stats)
+    expense_cost = sum(row['expense_cost'] for row in serialized_vehicle_stats)
+    avg_cost_per_100km = (total_operating_cost / total_distance_km * 100) if total_distance_km > 0 else 0
 
     return {
         'range': normalized_range,
         'weekly_trend': [{'week': row['week'], 'energy': float(row['energy'] or 0)} for row in weekly_trend],
-        'monthly_trend': monthly_trend,
+        'trend_bucket': trend_bucket,
+        'trend': trend,
         'vehicle_stats': serialized_vehicle_stats,
         'expense_categories': [
             {
@@ -680,21 +750,21 @@ def get_analytics_summary(
             for row in expense_categories
         ],
         'summary': {
-            'total_operating_cost_huf': total_operating_cost_huf,
+            'total_operating_cost': total_operating_cost,
             'total_distance_km': total_distance_km,
             'total_energy_kwh': total_energy_kwh,
-            'session_cost_huf': session_cost_huf,
-            'expense_cost_huf': expense_cost_huf,
+            'session_cost': session_cost,
+            'expense_cost': expense_cost,
             'avg_cost_per_100km': avg_cost_per_100km,
-            'expense_share_pct': (expense_cost_huf / total_operating_cost_huf * 100) if total_operating_cost_huf > 0 else 0,
-            'session_share_pct': (session_cost_huf / total_operating_cost_huf * 100) if total_operating_cost_huf > 0 else 0,
+            'expense_share_pct': (expense_cost / total_operating_cost * 100) if total_operating_cost > 0 else 0,
+            'session_share_pct': (session_cost / total_operating_cost * 100) if total_operating_cost > 0 else 0,
             'top_expense_category': {
                 'category': expense_categories[0]['category'],
                 'total_amount': _float(expense_categories[0].get('total_amount')),
                 'item_count': _int(expense_categories[0].get('item_count')),
             } if expense_categories else None,
         },
-        'total_expense_cost_huf': expense_cost_huf,
+        'total_expense_cost': expense_cost,
         'avg_cost_per_kwh': float(avg_row.get('avg_cost_per_kwh', 0) or 0),
     }
 
@@ -754,9 +824,9 @@ def get_vehicle_analytics_drilldown(
         )
         SELECT
             COALESCE(SUM(CASE WHEN event_type = 'charging' THEN energy_kwh ELSE 0 END), 0) AS total_energy_kwh,
-            COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS session_cost_huf,
-            COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS expense_cost_huf,
-            COALESCE(SUM(total_cost), 0) AS total_cost_huf,
+            COALESCE(SUM(CASE WHEN event_type IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS session_cost,
+            COALESCE(SUM(CASE WHEN event_type NOT IN ('charging', 'fueling') THEN total_cost ELSE 0 END), 0) AS expense_cost,
+            COALESCE(SUM(total_cost), 0) AS total_cost,
             COUNT(*) AS total_records,
             GREATEST(COALESCE(MAX(odometer_km), 0) - COALESCE(MIN(odometer_km), 0), 0) AS distance_km
         FROM filtered_events;
@@ -799,9 +869,13 @@ def get_vehicle_analytics_drilldown(
     )
     expense_categories = cur.fetchall()
 
-    monthly_trend = _fetch_monthly_stats(cur, user_id, start_date=start_date, end_date=end_date, vehicle_id=vehicle_id)
+    trend_bucket = _trend_bucket_for_range(normalized_range)
+    trend = _fetch_trend_stats(
+        cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
+        vehicle_id=vehicle_id, exclude_archived=False,
+    )
     distance_km = _float(summary.get('distance_km'))
-    total_cost_huf = _float(summary.get('total_cost_huf'))
+    total_cost = _float(summary.get('total_cost'))
 
     return {
         'range': normalized_range,
@@ -814,14 +888,15 @@ def get_vehicle_analytics_drilldown(
         },
         'summary': {
             'total_energy_kwh': _float(summary.get('total_energy_kwh')),
-            'session_cost_huf': _float(summary.get('session_cost_huf')),
-            'expense_cost_huf': _float(summary.get('expense_cost_huf')),
-            'total_cost_huf': total_cost_huf,
+            'session_cost': _float(summary.get('session_cost')),
+            'expense_cost': _float(summary.get('expense_cost')),
+            'total_cost': total_cost,
             'distance_km': distance_km,
             'total_records': _int(summary.get('total_records')),
-            'avg_cost_per_100km': (total_cost_huf / distance_km * 100) if distance_km > 0 else 0,
+            'avg_cost_per_100km': (total_cost / distance_km * 100) if distance_km > 0 else 0,
         },
-        'monthly_trend': monthly_trend,
+        'trend_bucket': trend_bucket,
+        'trend': trend,
         'expense_categories': [
             {
                 'category': row['category'],
@@ -843,3 +918,19 @@ def get_vehicle_analytics_drilldown(
             for row in recent_events
         ],
     }
+
+@router.get('/analytics/forecast')
+def get_cost_forecast(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+    """Projected running cost for the rest of the calendar year.
+
+    Separate from /analytics/summary because it answers a different question and has a
+    different shape: the summary reports what happened, this estimates what has not.
+    Keeping them apart also means a forecast that cannot be produced — a new account
+    with no history — does not take the analytics page down with it.
+    """
+    try:
+        return build_forecast(db, user_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

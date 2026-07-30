@@ -1,4 +1,4 @@
-# GarageOS Micro SaaS Tervezet
+# Mileage Micro SaaS Tervezet
 
 ## Kapcsolódó dokumentumok
 
@@ -8,7 +8,7 @@
 
 ## 1. Kiinduló helyzet
 
-Ez a projekt jelenleg egy jo alap a GarageOS szemelyes jarmu-koltsegkoveto platformhoz, de meg nem teljes Micro SaaS termek.
+Ez a projekt jelenleg egy jo alap a Mileage szemelyes jarmu-koltsegkoveto platformhoz, de meg nem teljes Micro SaaS termek.
 
 ### Ami már megvan
 

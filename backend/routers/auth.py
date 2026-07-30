@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import EmailStr
 import psycopg2
 from psycopg2.extras import Json
@@ -15,14 +16,16 @@ try:
         pwd_context,
         validate_password_strength,
     )
-    from backend.config import BOOTSTRAP_ADMIN_EMAIL, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
+    from backend.site_settings import get_site_settings
     from backend.schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
 except ModuleNotFoundError:
     from auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
     from auth_utils import create_access_token, create_refresh_token, get_current_user_id, hash_token, pwd_context, validate_password_strength
-    from config import BOOTSTRAP_ADMIN_EMAIL, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
+    from site_settings import get_site_settings
     from schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
 
 router = APIRouter(tags=['auth'])
@@ -77,12 +80,51 @@ def serialize_auth_log(row):
     }
 
 
-def build_auth_payload(db_user: dict, access_token: str, refresh_token: str):
+def load_user_profile(db, user_id) -> dict | None:
+    """The one description of a user the client gets, whichever endpoint it asks.
+
+    /auth/me, login and refresh each used to assemble this separately, and the short
+    version login and refresh returned held only id, username, email and role. The
+    client overwrites its whole user object with whatever those two return, so every
+    refresh silently reset the account's currency and unit preferences and — because
+    onboarded_at came back missing — dropped a working session into the onboarding
+    wizard. `role` was patched into the short version for exactly this reason once
+    already; sharing one loader is what stops the next field repeating it.
+    """
+    cur = db.cursor()
+    columns = ['id', 'username', 'email', 'role', 'created_at']
+    if column_exists(db, 'users', 'theme_mode'):
+        columns.append('theme_mode')
+    if column_exists(db, 'users', 'dismissed_alerts'):
+        columns.append('dismissed_alerts')
+    for preference in ('currency', 'distance_unit', 'volume_unit', 'onboarded_at'):
+        if column_exists(db, 'users', preference):
+            columns.append(preference)
+
+    cur.execute(f"SELECT {', '.join(columns)} FROM users WHERE id = %s;", (user_id,))
+    user = cur.fetchone()
+    if not user:
+        return None
+
+    user.setdefault('theme_mode', 'dark')
+    user.setdefault('role', 'user')
+    user.setdefault('dismissed_alerts', [])
+    user.setdefault('currency', 'EUR')
+    user.setdefault('distance_unit', 'km')
+    user.setdefault('volume_unit', 'l')
+    user['onboarded_at'] = user['onboarded_at'].isoformat() if user.get('onboarded_at') else None
+    return user
+
+
+def build_auth_payload(db, user_id, access_token: str, refresh_token: str):
+    profile = load_user_profile(db, user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='User not found')
     return {
         'access_token': access_token,
         'refresh_token': refresh_token,
         'token_type': 'bearer',
-        'user': {'id': db_user['id'], 'username': db_user['username'], 'email': db_user['email'], 'role': db_user.get('role', 'user')},
+        'user': profile,
     }
 
 
@@ -101,7 +143,7 @@ def create_session_tokens(db, db_user: dict):
         (db_user['id'], refresh_hash, refresh_expires_at),
     )
     db.commit()
-    return build_auth_payload(db_user, access_token, refresh_token)
+    return build_auth_payload(db, db_user['id'], access_token, refresh_token)
 
 
 def is_session_expired(expires_at):
@@ -115,24 +157,55 @@ def is_session_expired(expires_at):
 @router.post('/auth/register', status_code=201)
 def register(user: UserRegister, request: Request, db=Depends(get_db)):
     ensure_user_roles(db)
+
+    settings = get_site_settings(db)
+    if not settings['registration_open']:
+        log_auth_event(db, 'register', 'failed', email=user.email, ip_address=get_client_ip(request), details={'reason': 'registration_closed'})
+        db.commit()
+        raise HTTPException(status_code=403, detail='New registrations are currently closed.')
+
     validate_password_strength(user.password)
     pwd_hash = pwd_context.hash(user.password)
     cur = db.cursor()
     try:
-        cur.execute(
-            'INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s) RETURNING id;',
-            (user.username, user.email, pwd_hash, 'admin' if BOOTSTRAP_ADMIN_EMAIL and user.email.lower() == BOOTSTRAP_ADMIN_EMAIL.lower() else 'user'),
-        )
+        role = 'admin' if BOOTSTRAP_ADMIN_EMAIL and user.email.lower() == BOOTSTRAP_ADMIN_EMAIL.lower() else 'user'
+        if column_exists(db, 'users', 'currency'):
+            cur.execute(
+                'INSERT INTO users (username, email, password_hash, role, currency) VALUES (%s, %s, %s, %s, %s) RETURNING id;',
+                (user.username, user.email, pwd_hash, role, settings['default_currency']),
+            )
+        else:
+            cur.execute(
+                'INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s) RETURNING id;',
+                (user.username, user.email, pwd_hash, role),
+            )
         user_id = cur.fetchone()['id']
         db.commit()
         log_auth_event(db, 'register', 'success', user_id=user_id, email=user.email, ip_address=get_client_ip(request))
         db.commit()
         return {'message': 'User registered successfully', 'user_id': user_id}
-    except psycopg2.IntegrityError:
+    except psycopg2.IntegrityError as exc:
         db.rollback()
-        log_auth_event(db, 'register', 'failed', email=user.email, ip_address=get_client_ip(request), details={'reason': 'duplicate_user'})
+        # Both username and email carry a case-insensitive unique index, so "one of
+        # these is taken" left the client unable to say which field to fix. The
+        # constraint name says exactly which, and the sign-up form needs that to put
+        # the error under the right input.
+        constraint = getattr(getattr(exc, 'diag', None), 'constraint_name', None) or ''
+        if 'username' in constraint:
+            field, message = 'username', 'That name is already taken. Please pick another.'
+        elif 'email' in constraint:
+            field, message = 'email', 'An account already exists for this email address.'
+        else:
+            field, message = None, 'Username or email already exists'
+        log_auth_event(
+            db, 'register', 'failed', email=user.email, ip_address=get_client_ip(request),
+            details={'reason': 'duplicate_user', 'field': field},
+        )
         db.commit()
-        raise HTTPException(status_code=409, detail='Username or email already exists')
+        # Returned rather than raised so `field` can travel beside `detail`. A header
+        # would need CORS expose_headers to be readable off-origin; keeping detail a
+        # plain string keeps every existing caller working unchanged.
+        return JSONResponse(status_code=409, content={'detail': message, 'field': field})
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
@@ -213,18 +286,9 @@ def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(g
     log_auth_event(db, 'refresh', 'success', user_id=session['user_id'], email=session['email'], ip_address=get_client_ip(request))
     db.commit()
 
-    return build_auth_payload(
-        # role must be carried through: build_auth_payload falls back to 'user', so
-        # omitting it silently demoted admins in the client state on every refresh.
-        {
-            'id': session['user_id'],
-            'username': session['username'],
-            'email': session['email'],
-            'role': session.get('role', 'user'),
-        },
-        access_token,
-        new_refresh_token,
-    )
+    # The full profile is re-read rather than assembled from the session join, so a
+    # refresh cannot return a user that is missing fields the client depends on.
+    return build_auth_payload(db, session['user_id'], access_token, new_refresh_token)
 
 
 @router.post('/auth/logout')
@@ -330,20 +394,9 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db=Depends(g
 @router.get('/auth/me')
 def get_profile(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
     ensure_user_roles(db)
-    cur = db.cursor()
-    columns = ['id', 'username', 'email', 'role', 'created_at']
-    if column_exists(db, 'users', 'theme_mode'):
-        columns.append('theme_mode')
-    if column_exists(db, 'users', 'dismissed_alerts'):
-        columns.append('dismissed_alerts')
-
-    cur.execute(f"SELECT {', '.join(columns)} FROM users WHERE id = %s;", (user_id,))
-    user = cur.fetchone()
+    user = load_user_profile(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
-    user.setdefault('theme_mode', 'dark')
-    user.setdefault('role', 'user')
-    user.setdefault('dismissed_alerts', [])
     return user
 
 
@@ -381,6 +434,10 @@ def update_profile(
     new_password: str | None = Body(None),
     theme_mode: str | None = Body(None),
     dismissed_alerts: list[str] | None = Body(None),
+    currency: str | None = Body(None),
+    distance_unit: str | None = Body(None),
+    volume_unit: str | None = Body(None),
+    onboarding_complete: bool | None = Body(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
 ):
@@ -420,6 +477,31 @@ def update_profile(
         updates.append('dismissed_alerts = %s')
         values.append(Json(dismissed_alerts))
 
+    # Distance and volume are display conversions over canonical storage. Currency is
+    # only a label: switching it does not restate past entries, because that would need
+    # the exchange rate on each original date.
+    if currency is not None and column_exists(db, 'users', 'currency'):
+        if currency not in CURRENCY_CODES:
+            raise HTTPException(status_code=400, detail=f'Unsupported currency: {currency}')
+        updates.append('currency = %s')
+        values.append(currency)
+
+    if distance_unit is not None and column_exists(db, 'users', 'distance_unit'):
+        if distance_unit not in DISTANCE_UNITS:
+            raise HTTPException(status_code=400, detail=f'Unsupported distance unit: {distance_unit}')
+        updates.append('distance_unit = %s')
+        values.append(distance_unit)
+
+    if volume_unit is not None and column_exists(db, 'users', 'volume_unit'):
+        if volume_unit not in VOLUME_UNITS:
+            raise HTTPException(status_code=400, detail=f'Unsupported volume unit: {volume_unit}')
+        updates.append('volume_unit = %s')
+        values.append(volume_unit)
+
+    # Skipping sets this too. The flag means "we have asked", not "they answered".
+    if onboarding_complete and column_exists(db, 'users', 'onboarded_at'):
+        updates.append('onboarded_at = NOW()')
+
     if not updates:
         return {'message': 'No changes requested'}
 
@@ -439,6 +521,9 @@ def update_profile(
             changed_fields.append('theme_mode')
         if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
             changed_fields.append('dismissed_alerts')
+        for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit)):
+            if value is not None and column_exists(db, 'users', name):
+                changed_fields.append(name)
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})
         db.commit()
         return {'message': 'Profile updated successfully'}
@@ -448,3 +533,12 @@ def update_profile(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
+
+@router.get('/settings/units')
+def get_unit_options():
+    """The choices offered in settings, so the client does not keep its own copy."""
+    return {
+        'currencies': SUPPORTED_CURRENCIES,
+        'distance_units': [{'value': k, **v} for k, v in DISTANCE_UNITS.items()],
+        'volume_units': [{'value': k, **v} for k, v in VOLUME_UNITS.items()],
+    }

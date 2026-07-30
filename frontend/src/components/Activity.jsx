@@ -36,6 +36,8 @@ import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
+import { useAuth } from '../context/useAuth';
+import { createFormatters } from '../utils/units';
 import { TimelineSectionSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
 import RecurringExpenses from './RecurringExpenses';
@@ -70,6 +72,8 @@ const getTypeChipSx = (theme, activityType) => {
 function Activity() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const { user } = useAuth();
+  const fmt = useMemo(() => createFormatters(user), [user]);
 
   // The tab lives in the URL so it can be linked to (the dashboard alerts point
   // straight at Recurring) and so a refresh keeps you where you were.
@@ -161,7 +165,7 @@ function Activity() {
               end_time: (row.end_time || '').slice(0, 16),
               kwh: row.kwh ?? '',
               fuel_liters: row.fuel_liters ?? '',
-              cost: row.cost_huf ?? '',
+              cost: row.cost_amount ?? '',
               source: row.source || 'manual',
               odometer: row.odometer ?? '',
               battery_level_start: row.battery_level_start ?? '',
@@ -174,7 +178,7 @@ function Activity() {
               vehicle_id: row.vehicle_id ? String(row.vehicle_id) : '',
               category: row.category,
               cost: row.amount ?? '',
-              currency: row.currency || 'HUF',
+              currency: row.currency || fmt.currency,
               date: (row.date || '').slice(0, 10),
               notes: row.description || '',
             },
@@ -218,7 +222,7 @@ function Activity() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'garageos-records.csv';
+      link.download = 'mileage-records.csv';
       link.click();
       window.URL.revokeObjectURL(url);
     } catch {
@@ -305,7 +309,7 @@ function Activity() {
               </TextField>
               <Stack direction="row" spacing={1} sx={{ pt: { md: 1 } }}>
                 <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleCsvFilePicked} />
-                <Tooltip title="Import a CSV exported from GarageOS">
+                <Tooltip title="Import a CSV exported from Mileage">
                   <span>
                     <IconButton onClick={() => fileInputRef.current?.click()} disabled={csvImporting}>
                       <UploadFileIcon />
@@ -369,7 +373,7 @@ function Activity() {
 
                       <Stack direction="row" spacing={1} alignItems="center">
                         <Typography variant="subtitle1" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
-                          {Number(item.amount_huf).toLocaleString()} HUF
+                          {fmt.money(item.amount)}
                         </Typography>
                         <Tooltip title="Edit record">
                           <span>

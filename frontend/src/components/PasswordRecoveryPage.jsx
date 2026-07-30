@@ -1,251 +1,294 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
-  Chip,
-  Container,
+  CircularProgress,
+  IconButton,
   Link,
-  Paper,
   Stack,
   TextField,
+  Tooltip,
   Typography,
-  useTheme,
 } from '@mui/material';
-import { alpha } from '@mui/material/styles';
+import { ContentCopyOutlined as CopyIcon } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
+import AuthLayout from './AuthLayout';
+import PasswordField from './PasswordField';
+import { isPasswordValid, isValidEmail } from '../utils/passwordPolicy';
+
+const postJson = async (path, body) => {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Something went wrong. Please try again.');
+  return data;
+};
 
 function PasswordRecoveryPage({ mode = 'forgot' }) {
   const { authenticated } = useAuth();
-  const theme = useTheme();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const isForgot = mode === 'forgot';
+
   const [email, setEmail] = useState('');
   const [resetToken, setResetToken] = useState(searchParams.get('token') || '');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [touched, setTouched] = useState({});
   const [submitting, setSubmitting] = useState(false);
-  const [devResetToken, setDevResetToken] = useState('');
-  const [devResetExpiry, setDevResetExpiry] = useState('');
+  const [formError, setFormError] = useState('');
+  const [requested, setRequested] = useState(false);
+  const [devToken, setDevToken] = useState('');
+  const [devExpiry, setDevExpiry] = useState('');
+
+  const emailRef = useRef(null);
+  const tokenRef = useRef(null);
+  const passwordRef = useRef(null);
+  const confirmRef = useRef(null);
 
   useEffect(() => {
-    if (authenticated) {
-      navigate('/');
-    }
+    if (authenticated) navigate('/');
   }, [authenticated, navigate]);
 
   useEffect(() => {
     setResetToken(searchParams.get('token') || '');
   }, [searchParams]);
 
-  const handleForgotPassword = async (event) => {
+  const errors = useMemo(() => {
+    const next = {};
+    if (isForgot) {
+      if (!email.trim()) next.email = 'Email address is required.';
+      else if (!isValidEmail(email)) next.email = 'That does not look like an email address.';
+      return next;
+    }
+    if (!resetToken.trim()) next.token = 'Paste the reset token from your email.';
+    if (!newPassword) next.password = 'Choose a new password.';
+    else if (!isPasswordValid(newPassword)) next.password = 'Password does not meet all the requirements below.';
+    if (!confirmPassword) next.confirm = 'Please repeat the password.';
+    else if (confirmPassword !== newPassword) next.confirm = 'The two passwords do not match.';
+    return next;
+  }, [isForgot, email, resetToken, newPassword, confirmPassword]);
+
+  const markTouched = (name) => () => setTouched((previous) => ({ ...previous, [name]: true }));
+  const showError = (name) => (touched[name] ? errors[name] : undefined);
+
+  const focusFirstInvalid = (order) => {
+    const refs = { email: emailRef, token: tokenRef, password: passwordRef, confirm: confirmRef };
+    const first = order.find((name) => errors[name]);
+    if (!first) return false;
+    setTouched({ email: true, token: true, password: true, confirm: true });
+    refs[first].current?.focus();
+    return true;
+  };
+
+  const handleForgot = async (event) => {
     event.preventDefault();
+    if (submitting || focusFirstInvalid(['email'])) return;
+
     setSubmitting(true);
-    setDevResetToken('');
-    setDevResetExpiry('');
-
+    setFormError('');
     try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || 'Failed to start password reset');
-      }
-
-      setDevResetToken(data.reset_token || '');
-      setDevResetExpiry(data.expires_at || '');
-      toast.success(data.message || 'Password reset flow started');
+      const data = await postJson('/api/auth/forgot-password', { email: email.trim() });
+      // The server answers the same way whether or not the address exists, so the
+      // screen must not imply an account was found either.
+      setRequested(true);
+      setDevToken(data.reset_token || '');
+      setDevExpiry(data.expires_at || '');
     } catch (error) {
+      setFormError(error.message);
       toast.error(error.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleResetPassword = async (event) => {
+  const handleReset = async (event) => {
     event.preventDefault();
-    if (newPassword !== confirmPassword) {
-      toast.error('Passwords do not match');
-      return;
-    }
+    if (submitting || focusFirstInvalid(['token', 'password', 'confirm'])) return;
 
     setSubmitting(true);
+    setFormError('');
     try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+      await postJson('/api/auth/reset-password', {
+        reset_token: resetToken.trim(),
+        new_password: newPassword,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Failed to reset password');
-      }
-
-      toast.success(data.message || 'Password reset successfully');
+      toast.success('Password updated. Sign in with your new password.');
       navigate('/login');
     } catch (error) {
+      setFormError(error.message);
       toast.error(error.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const isForgotMode = mode === 'forgot';
+  const backToSignIn = (
+    <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
+      <Link component="button" type="button" underline="hover" onClick={() => navigate('/login')} sx={{ fontWeight: 600, fontSize: '0.86rem' }}>
+        Back to sign in
+      </Link>
+      <Typography variant="caption" color="text.disabled" aria-hidden="true">·</Typography>
+      <Link component="button" type="button" underline="hover" onClick={() => navigate(isForgot ? '/register' : '/forgot-password')} sx={{ fontWeight: 600, fontSize: '0.86rem' }}>
+        {isForgot ? 'Create an account' : 'Request a new token'}
+      </Link>
+    </Box>
+  );
+
+  if (isForgot && requested) {
+    return (
+      <AuthLayout
+        kicker="Check your inbox"
+        title="Reset requested"
+        subtitle={`If an account exists for ${email.trim()}, a reset token is on its way. The token expires shortly, so use it soon.`}
+        footer={backToSignIn}
+      >
+        <Stack spacing={2.25}>
+          {devToken ? (
+            <Alert severity="info" sx={{ '& .MuiAlert-message': { width: '100%', minWidth: 0 } }}>
+              <AlertTitle sx={{ fontWeight: 700 }}>Development mode</AlertTitle>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                No mail is sent outside production, so the token is shown here instead.
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                <Typography
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', wordBreak: 'break-all', flexGrow: 1, minWidth: 0 }}
+                >
+                  {devToken}
+                </Typography>
+                <Tooltip title="Copy token">
+                  <IconButton
+                    size="small"
+                    aria-label="Copy reset token"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(devToken);
+                      toast.success('Token copied');
+                    }}
+                  >
+                    <CopyIcon fontSize="inherit" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              {devExpiry ? (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Expires {new Date(devExpiry).toLocaleString()}
+                </Typography>
+              ) : null}
+            </Alert>
+          ) : null}
+
+          <Button
+            fullWidth
+            variant="contained"
+            sx={{ py: 1.5 }}
+            onClick={() => navigate(devToken ? `/reset-password?token=${encodeURIComponent(devToken)}` : '/reset-password')}
+          >
+            Continue to set a new password
+          </Button>
+          <Button
+            fullWidth
+            variant="text"
+            onClick={() => { setRequested(false); setDevToken(''); setDevExpiry(''); }}
+          >
+            Use a different email
+          </Button>
+        </Stack>
+      </AuthLayout>
+    );
+  }
 
   return (
-    <Box className="auth-shell">
-      <Container maxWidth="lg">
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', md: '1.1fr 0.9fr' },
-            gap: 3,
-            alignItems: 'stretch',
-          }}
-        >
-          <Paper
-            sx={{
-              p: { xs: 3, md: 4 },
-              borderRadius: 4,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              minHeight: { xs: 260, md: 620 },
-              position: 'relative',
-              overflow: 'hidden',
-            }}
-          >
-            <Box
-              sx={{
-                position: 'absolute',
-                inset: 0,
-                opacity: theme.palette.mode === 'dark' ? 0.2 : 0.3,
-                pointerEvents: 'none',
-                backgroundImage: `linear-gradient(${alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.05)} 1px, transparent 1px), linear-gradient(90deg, ${alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.05)} 1px, transparent 1px)`,
-                backgroundSize: '32px 32px',
-              }}
+    <AuthLayout
+      kicker={isForgot ? 'Account recovery' : 'Almost done'}
+      title={isForgot ? 'Forgot your password?' : 'Set a new password'}
+      subtitle={
+        isForgot
+          ? 'Enter the email you signed up with and we will send a reset token.'
+          : 'Paste the token you were sent, then choose a password you have not used here before.'
+      }
+      footer={backToSignIn}
+    >
+      <form onSubmit={isForgot ? handleForgot : handleReset} noValidate>
+        <Stack spacing={2.25}>
+          {formError ? <Alert severity="error" role="alert">{formError}</Alert> : null}
+
+          {isForgot ? (
+            <TextField
+              fullWidth
+              required
+              inputRef={emailRef}
+              label="Email"
+              type="email"
+              value={email}
+              onChange={(event) => { setEmail(event.target.value); setFormError(''); }}
+              onBlur={markTouched('email')}
+              error={Boolean(showError('email'))}
+              helperText={showError('email')}
+              autoComplete="email"
+              autoFocus
             />
-            <Box sx={{ position: 'relative' }}>
-              <Typography className="industrial-kicker">Security Console</Typography>
-              <Typography className="industrial-title">
-                {isForgotMode ? 'Access Recovery' : 'Reset Credentials'}
-              </Typography>
-              <Typography className="industrial-subtitle">
-                {isForgotMode
-                  ? 'Request a reset token for your GarageOS account. In development, the token is shown directly so recovery can be tested without email infrastructure.'
-                  : 'Provide the reset token and set a new password that satisfies the current password policy.'}
-              </Typography>
-            </Box>
+          ) : (
+            <>
+              <TextField
+                fullWidth
+                required
+                inputRef={tokenRef}
+                label="Reset token"
+                value={resetToken}
+                onChange={(event) => { setResetToken(event.target.value); setFormError(''); }}
+                onBlur={markTouched('token')}
+                error={Boolean(showError('token'))}
+                helperText={showError('token') || 'Copied from the reset email.'}
+                autoComplete="one-time-code"
+                slotProps={{ htmlInput: { style: { fontFamily: 'monospace' } } }}
+                autoFocus={!resetToken}
+              />
+              <PasswordField
+                inputRef={passwordRef}
+                label="New password"
+                value={newPassword}
+                onChange={(event) => { setNewPassword(event.target.value); setFormError(''); }}
+                onBlur={markTouched('password')}
+                error={showError('password')}
+                autoComplete="new-password"
+                showPolicy
+                autoFocus={Boolean(resetToken)}
+              />
+              <PasswordField
+                inputRef={confirmRef}
+                label="Repeat new password"
+                value={confirmPassword}
+                onChange={(event) => { setConfirmPassword(event.target.value); setFormError(''); }}
+                onBlur={markTouched('confirm')}
+                error={showError('confirm')}
+                autoComplete="new-password"
+              />
+            </>
+          )}
 
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 3, position: 'relative' }}>
-              <Chip label="Email-first auth" color="primary" variant="outlined" />
-              <Chip label="Dev-safe reset flow" color="secondary" variant="outlined" />
-              <Chip label="Rotating session model" variant="outlined" />
-            </Stack>
-
-            {isForgotMode && devResetToken ? (
-              <Paper sx={{ p: 2.25, mt: 4, position: 'relative', zIndex: 1 }}>
-                <Typography variant="subtitle2" color="secondary" gutterBottom>
-                  Development Reset Token
-                </Typography>
-                <Typography sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mb: 1.25 }}>
-                  {devResetToken}
-                </Typography>
-                {devResetExpiry ? (
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    Expires: {new Date(devResetExpiry).toLocaleString()}
-                  </Typography>
-                ) : null}
-                <Button variant="outlined" onClick={() => navigate(`/reset-password?token=${encodeURIComponent(devResetToken)}`)}>
-                  Continue To Reset
-                </Button>
-              </Paper>
-            ) : null}
-          </Paper>
-
-          <Paper sx={{ p: { xs: 3, md: 4 }, borderRadius: 4, alignSelf: 'center' }}>
-            <Typography className="industrial-kicker">Recovery Node</Typography>
-            <Typography variant="h5" sx={{ mb: 1 }}>
-              {isForgotMode ? 'Forgot Password' : 'Reset Password'}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              {isForgotMode
-                ? 'Enter your email address and GarageOS will prepare a reset token.'
-                : 'Paste the reset token and choose a new password with uppercase, lowercase, and number characters.'}
-            </Typography>
-
-            {isForgotMode ? (
-              <form onSubmit={handleForgotPassword}>
-                <Stack spacing={2}>
-                  <TextField
-                    fullWidth
-                    label="Email"
-                    type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                  <Button type="submit" fullWidth variant="contained" disabled={submitting} sx={{ py: 1.6 }}>
-                    {submitting ? 'Preparing Reset...' : 'Request Reset Token'}
-                  </Button>
-                </Stack>
-              </form>
-            ) : (
-              <form onSubmit={handleResetPassword}>
-                <Stack spacing={2}>
-                  <TextField
-                    fullWidth
-                    label="Reset Token"
-                    value={resetToken}
-                    onChange={(event) => setResetToken(event.target.value)}
-                  />
-                  <TextField
-                    fullWidth
-                    label="New Password"
-                    type="password"
-                    value={newPassword}
-                    onChange={(event) => setNewPassword(event.target.value)}
-                  />
-                  <TextField
-                    fullWidth
-                    label="Confirm New Password"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                  />
-                  <Alert severity="info" sx={{ alignItems: 'center' }}>
-                    Password must be at least 8 characters and include uppercase, lowercase, and number characters.
-                  </Alert>
-                  <Button type="submit" fullWidth variant="contained" disabled={submitting} sx={{ py: 1.6 }}>
-                    {submitting ? 'Resetting...' : 'Set New Password'}
-                  </Button>
-                </Stack>
-              </form>
-            )}
-
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2.5, gap: 2, flexWrap: 'wrap' }}>
-              <Link component="button" type="button" underline="hover" color="primary" onClick={() => navigate('/login')}>
-                Back To Sign In
-              </Link>
-              <Link
-                component="button"
-                type="button"
-                underline="hover"
-                color="secondary"
-                onClick={() => navigate(isForgotMode ? '/register' : '/forgot-password')}
-              >
-                {isForgotMode ? 'Create Account Instead' : 'Need A New Reset Token?'}
-              </Link>
-            </Box>
-          </Paper>
-        </Box>
-      </Container>
-    </Box>
+          <Button
+            type="submit"
+            fullWidth
+            variant="contained"
+            disabled={submitting}
+            sx={{ py: 1.5, mt: 0.5 }}
+            startIcon={submitting ? <CircularProgress size={17} color="inherit" /> : null}
+          >
+            {submitting
+              ? (isForgot ? 'Sending…' : 'Updating…')
+              : (isForgot ? 'Send reset token' : 'Update password')}
+          </Button>
+        </Stack>
+      </form>
+    </AuthLayout>
   );
 }
 

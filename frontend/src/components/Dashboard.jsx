@@ -39,13 +39,9 @@ import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { formatCategoryLabel } from '../utils/expenseCategories';
+import { createFormatters } from '../utils/units';
 import { DashboardSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
-
-const huf = (value) => `${Math.round(Number(value || 0)).toLocaleString()} HUF`;
-// Axis labels reach seven digits on real data, which crowds out the plot area.
-const compact = (value) =>
-  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0));
 
 const monthLabel = (value) => {
   if (!value) return '';
@@ -115,6 +111,10 @@ const Dashboard = () => {
   const chartAnimation = !useMediaQuery('(prefers-reduced-motion: reduce)');
 
   const { user, updateUser } = useAuth();
+  // Money, distance and volume all follow the account's settings.
+  const fmt = useMemo(() => createFormatters(user), [user]);
+  const huf = fmt.money;
+  const compact = fmt.numberCompact;   // tengelyekre: penznem nelkul
   const [stats, setStats] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -220,11 +220,11 @@ const Dashboard = () => {
     );
   }
 
-  const costDelta = getDelta(current.total_cost_huf, previous.total_cost_huf, 'lower');
+  const costDelta = getDelta(current.total_cost, previous.total_cost, 'lower');
   const supporting = [
-    { label: 'Driving spend', value: huf(current.session_cost_huf), hint: `${current.session_count || 0} sessions`, color: theme.palette.primary.main },
-    { label: 'Other costs', value: huf(current.expense_cost_huf), hint: `${current.expense_count || 0} entries`, color: theme.palette.secondary.main },
-    { label: 'Cost per 100 km', value: huf(current.avg_cost_per_100km), hint: `${Math.round(current.total_distance_km || 0).toLocaleString()} km tracked`, color: theme.palette.warning.main },
+    { label: 'Driving spend', value: huf(current.session_cost), hint: `${current.session_count || 0} sessions`, color: theme.palette.primary.main },
+    { label: 'Other costs', value: huf(current.expense_cost), hint: `${current.expense_count || 0} entries`, color: theme.palette.secondary.main },
+    { label: `Cost ${fmt.perDistanceLabel}`, value: fmt.moneyPerHundred(current.avg_cost_per_100km), hint: `${fmt.distance(current.total_distance_km)} tracked`, color: theme.palette.warning.main },
   ];
 
   const tooltipStyle = {
@@ -295,7 +295,7 @@ const Dashboard = () => {
         <Typography variant="body2" color="text.secondary">Total this month</Typography>
         <Stack direction="row" spacing={2} alignItems="baseline" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
           <Typography variant="h3" component="div" fontWeight={800} sx={{ lineHeight: 1.1 }}>
-            {huf(current.total_cost_huf)}
+            {huf(current.total_cost)}
           </Typography>
           <DeltaChip delta={costDelta} />
         </Stack>
@@ -332,9 +332,9 @@ const Dashboard = () => {
                 formatter={(value, name) => [huf(value), name]}
               />
               <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
-              <Bar dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+              <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
                 fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-              <Bar dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+              <Bar dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
                 fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
             </BarChart>
           </ResponsiveContainer>
@@ -365,7 +365,7 @@ const Dashboard = () => {
                     </Typography>
                   </Box>
                   <Typography variant="body2" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
-                    {huf(item.amount_huf)}
+                    {huf(item.amount)}
                   </Typography>
                 </Stack>
               ))}
@@ -422,7 +422,7 @@ const Dashboard = () => {
                   <Typography variant="body2" fontWeight={700} noWrap>{vehicle.name}</Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
                     {huf(vehicle.total_cost)}
-                    {vehicle.cost_per_100km ? ` · ${huf(vehicle.cost_per_100km)}/100km` : ''}
+                    {vehicle.cost_per_100km ? ` · ${fmt.moneyPerHundred(vehicle.cost_per_100km)} ${fmt.perDistanceLabel}` : ''}
                   </Typography>
                 </Stack>
                 <LinearProgress

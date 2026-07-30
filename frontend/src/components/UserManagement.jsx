@@ -37,7 +37,7 @@ const roleChipSx = (theme, role) => {
   };
 };
 
-function UserManagement() {
+function UserManagement({ embedded = false }) {
   const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -130,10 +130,14 @@ function UserManagement() {
   if (loading) return null;
 
   return (
-    <Box className="section-shell stagger">
-      <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 1 }}>
-        User Management
-      </Typography>
+    <Box className={embedded ? undefined : 'section-shell stagger'}>
+      {/* The Admin page supplies the heading; a second h1 inside a tab panel would
+          both duplicate it and break the heading order. */}
+      {embedded ? null : (
+        <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 1 }}>
+          User Management
+        </Typography>
+      )}
 
       <Paper sx={{ p: 2.5, borderRadius: 4 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

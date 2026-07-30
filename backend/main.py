@@ -33,9 +33,9 @@ except ModuleNotFoundError:
     from routers.vehicles import router as vehicles_router
 
 configure_logging()
-logger = logging.getLogger('garageos.api')
+logger = logging.getLogger('mileage.api')
 
-app = FastAPI(title="GarageOS API")
+app = FastAPI(title="Mileage API")
 
 app.add_middleware(
     CORSMiddleware,

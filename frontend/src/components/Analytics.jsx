@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -42,6 +43,8 @@ import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getChartColors } from '../utils/chartColors';
 import { formatCategoryLabel } from '../utils/expenseCategories';
+import { useAuth } from '../context/useAuth';
+import { createFormatters } from '../utils/units';
 import { AnalyticsSkeleton } from './SectionSkeletons';
 
 const RANGES = [
@@ -51,52 +54,79 @@ const RANGES = [
   { value: 'all', label: 'All' },
 ];
 
-const huf = (v) => `${Math.round(Number(v || 0)).toLocaleString()} HUF`;
-const km = (v) => `${Math.round(Number(v || 0)).toLocaleString()} km`;
-const compact = (v) =>
-  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v || 0));
-const monthLabel = (value) => {
-  if (!value) return '';
-  const [y, m] = value.split('-');
-  return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: 'short' });
+// The trend arrives bucketed by the range: 30 days as days, 90 as weeks, longer as
+// months. The backend sends every bucket as the ISO date it starts on, so parse once
+// and let the bucket decide how much of it to show.
+const parsePeriod = (value) => {
+  if (!value) return null;
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
 };
 
-const COLUMNS = [
+// Axis ticks stay terse — a bare month repeated across two years is ambiguous, so the
+// year is added on the first tick and whenever a new one starts.
+const buildTickLabel = (bucket) => (value, index) => {
+  const dt = parsePeriod(value);
+  if (!dt) return '';
+  if (bucket === 'month') {
+    const month = dt.toLocaleDateString(undefined, { month: 'short' });
+    // The year is apostrophised rather than run together: a plain "Jul 25" is exactly
+    // how a day tick renders July 25th, and the two buckets must not look alike.
+    const startsYear = index === 0 || dt.getMonth() === 0;
+    return startsYear ? `${month} '${String(dt.getFullYear()).slice(-2)}` : month;
+  }
+  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
+// The tooltip has room to be unambiguous, and a week needs saying which week.
+const buildTooltipLabel = (bucket) => (value) => {
+  const dt = parsePeriod(value);
+  if (!dt) return '';
+  if (bucket === 'month') return dt.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const full = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return bucket === 'week' ? `Week of ${full}` : full;
+};
+
+const BUCKET_NOUN = { day: 'day', week: 'week', month: 'month' };
+
+// Built per render because the labels and formatters follow the account's units.
+const buildColumns = (fmt) => [
   { id: 'name', label: 'Vehicle', numeric: false },
-  { id: 'total_cost', label: 'Total cost', numeric: true, format: huf },
-  { id: 'session_cost', label: 'Driving', numeric: true, format: huf },
-  { id: 'expense_cost', label: 'Other', numeric: true, format: huf },
-  { id: 'distance_km', label: 'Distance', numeric: true, format: km },
-  { id: 'cost_per_100km', label: 'Per 100 km', numeric: true, format: (v) => (v ? huf(v) : '—') },
-  { id: 'total_energy', label: 'Energy', numeric: true, format: (v) => (v ? `${Math.round(v).toLocaleString()} kWh` : '—') },
+  { id: 'total_cost', label: 'Total cost', numeric: true, format: fmt.money },
+  { id: 'session_cost', label: 'Driving', numeric: true, format: fmt.money },
+  { id: 'expense_cost', label: 'Other', numeric: true, format: fmt.money },
+  { id: 'distance_km', label: 'Distance', numeric: true, format: fmt.distance },
+  { id: `Per 100 ${fmt.distanceShort}`, label: `Per 100 ${fmt.distanceShort}`, numeric: true,
+    sortKey: 'cost_per_100km',
+    format: (v) => (v ? fmt.moneyPerHundred(v) : '—') },
+  { id: 'total_energy', label: 'Energy', numeric: true, format: (v) => (v ? fmt.energy(v) : '—') },
 ];
 
 // Three ways to read "efficient", because they disagree and the disagreement matters:
 // a car can be the cheapest to drive while looking expensive overall simply because
 // its insurance is. Lower is better for all three.
-const EFFICIENCY_METRICS = {
+// compute() always works in the canonical per-100km figure; format() converts it, so
+// the ranking order stays identical whichever units are selected.
+const buildMetrics = (fmt) => ({
   running: {
     label: 'Cost to drive',
-    unit: 'HUF / 100 km',
     note: 'Charging and fuel only — what it costs to actually move the car.',
     compute: (v) => (v.distance_km > 0 ? (Number(v.session_cost || 0) / v.distance_km) * 100 : null),
-    format: huf,
+    format: fmt.moneyPerHundred,
   },
   total: {
     label: 'Total cost',
-    unit: 'HUF / 100 km',
     note: 'Everything divided by distance — fuel plus insurance, tax, maintenance.',
     compute: (v) => (v.distance_km > 0 ? Number(v.cost_per_100km || 0) : null),
-    format: huf,
+    format: fmt.moneyPerHundred,
   },
   energy: {
     label: 'Energy use',
-    unit: 'kWh / 100 km',
     note: 'Consumption regardless of price. Only vehicles that charge appear here.',
     compute: (v) => (v.distance_km > 0 && v.total_energy > 0 ? (Number(v.total_energy) / v.distance_km) * 100 : null),
-    format: (v) => `${Number(v).toFixed(1)} kWh`,
+    format: (v) => fmt.energy(v),
   },
-};
+});
 
 const Figure = ({ label, value, hint, color }) => (
   <Box sx={{ borderLeft: `3px solid ${color}`, pl: 1.5 }}>
@@ -118,7 +148,13 @@ const Analytics = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const chartAnimation = !useMediaQuery('(prefers-reduced-motion: reduce)');
+  const isLight = theme.palette.mode === 'light';
   const COLORS = getChartColors(theme);
+  const { user } = useAuth();
+  const fmt = useMemo(() => createFormatters(user), [user]);
+  const huf = fmt.money;
+  const km = fmt.distance;
+  const compact = fmt.numberCompact;   // tengelyekre: penznem nelkul
 
   const [range, setRange] = useState('all');
   const [data, setData] = useState(null);
@@ -135,6 +171,19 @@ const Analytics = () => {
   const [metricKey, setMetricKey] = useState('running');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [drilldown, setDrilldown] = useState(null);
+  const [forecast, setForecast] = useState(null);
+
+  // The server decides the bucket from the range; read it back rather than deriving it
+  // here, so the axis can never disagree with the data it is labelling. Falls back to
+  // months for the first render, before any response has arrived.
+  const trendBucket = data?.trend_bucket || 'month';
+  const trendTick = useMemo(() => buildTickLabel(trendBucket), [trendBucket]);
+  const trendTooltipLabel = useMemo(() => buildTooltipLabel(trendBucket), [trendBucket]);
+  const trendNoun = BUCKET_NOUN[trendBucket] || 'month';
+
+  const drilldownBucket = drilldown?.trend_bucket || trendBucket;
+  const drilldownTick = useMemo(() => buildTickLabel(drilldownBucket), [drilldownBucket]);
+  const drilldownTooltipLabel = useMemo(() => buildTooltipLabel(drilldownBucket), [drilldownBucket]);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -157,6 +206,18 @@ const Analytics = () => {
   }, [range]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Independent of the range: the projection always runs to the end of the calendar
+  // year, so it never needs refetching when the range changes. Failure is silent — an
+  // estimate is not worth an error toast on a page whose real numbers still loaded.
+  useEffect(() => {
+    let active = true;
+    apiFetch('/api/analytics/forecast')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => { if (active && payload) setForecast(payload); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   // Default the drilldown to whichever vehicle leads the current sort.
   useEffect(() => {
@@ -185,7 +246,9 @@ const Analytics = () => {
     });
   }, [data, orderBy, order]);
 
-  const metric = EFFICIENCY_METRICS[metricKey];
+  const COLUMNS = useMemo(() => buildColumns(fmt), [fmt]);
+  const METRICS = useMemo(() => buildMetrics(fmt), [fmt]);
+  const metric = METRICS[metricKey];
   const hasEnergyData = (data?.vehicle_stats || []).some(
     (v) => v.distance_km > 0 && Number(v.total_energy || 0) > 0,
   );
@@ -206,6 +269,39 @@ const Analytics = () => {
   useEffect(() => {
     if (metricKey === 'energy' && !hasEnergyData) setMetricKey('running');
   }, [metricKey, hasEnergyData]);
+
+  // The projection only makes sense against monthly buckets: it is produced per month
+  // to the end of the year, and pasting months next to daily or weekly bars would put
+  // two different time scales on one axis.
+  const projectionOn = trendBucket === 'month' && Boolean(forecast?.available) && (forecast?.months?.length > 0);
+
+  const chartData = useMemo(() => {
+    const rows = (data?.trend || []).map((row) => ({ ...row }));
+    if (!projectionOn) return rows;
+
+    const byPeriod = new Map(rows.map((row) => [row.period, row]));
+    forecast.months.forEach((month) => {
+      const existing = byPeriod.get(month.period);
+      if (existing) {
+        // The month under way: real spend so far, estimate stacked on top of it, so
+        // the bar is not silently double counted.
+        existing.projected_session_cost = month.session_cost;
+        existing.projected_expense_cost = month.expense_cost;
+      } else {
+        rows.push({
+          period: month.period,
+          session_cost: 0,
+          expense_cost: 0,
+          projected_session_cost: month.session_cost,
+          projected_expense_cost: month.expense_cost,
+          // Null rather than 0 so the efficiency line stops at the last real month
+          // instead of diving to the axis.
+          avg_cost_per_100km: null,
+        });
+      }
+    });
+    return rows;
+  }, [data, forecast, projectionOn]);
 
   const handleSort = (columnId) => {
     if (orderBy === columnId) setOrder(order === 'asc' ? 'desc' : 'asc');
@@ -281,42 +377,118 @@ const Analytics = () => {
           {/* Headline figures for the selected range. */}
           <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2 }}>
-              <Figure label="Total cost" value={huf(summary.total_operating_cost_huf)} hint={rangeLabel}
+              <Figure label="Total cost" value={huf(summary.total_operating_cost)} hint={rangeLabel}
                 color={theme.palette.secondary.main} />
               <Figure label="Distance" value={km(summary.total_distance_km)}
                 hint={`${(data.vehicle_stats || []).length} vehicles`} color={theme.palette.primary.main} />
-              <Figure label="Cost per 100 km" value={huf(summary.avg_cost_per_100km)} hint="across the fleet"
+              <Figure label={`Cost per 100 ${fmt.distanceShort}`} value={huf(summary.avg_cost_per_100km)} hint="across the fleet"
                 color={theme.palette.warning.main} />
               <Figure label="Cost per kWh" value={huf(data.avg_cost_per_kwh)}
                 hint={`${Math.round(summary.total_energy_kwh || 0).toLocaleString()} kWh charged`}
                 color={theme.palette.success.main} />
             </Box>
+            {forecast?.available ? (
+              <>
+                <Divider sx={{ my: 2 }} />
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap' }}>
+                  <Typography variant="body2" color="text.secondary">Projected to 31 December</Typography>
+                  {/* Deliberately not styled like the measured figures above: it is the
+                      only number on this card nobody has actually spent. */}
+                  <Typography variant="h6" component="span" fontWeight={700} color="text.secondary"
+                    sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    ≈ {huf(forecast.summary.remaining_cost)}
+                  </Typography>
+                  <Chip size="small" variant="outlined" label="estimate" sx={{ height: 20 }} />
+                  <Typography variant="caption" color="text.disabled">
+                    {forecast.summary.months_ahead} month{forecast.summary.months_ahead === 1 ? '' : 's'} ahead
+                  </Typography>
+                </Box>
+              </>
+            ) : null}
           </Card>
 
           {/* Cost over time, with the efficiency line the dashboard does not show. */}
           <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
             <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Cost over time</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Bars are spend, the line is cost per 100 km — a month can look expensive simply because you drove more.
+            <Typography variant="body2" color="text.secondary" sx={{ mb: projectionOn ? 1.25 : 2 }}>
+              {`Bars are spend, the line is cost per 100 ${fmt.distanceShort} — a ${trendNoun} can look expensive simply because you drove more.`}
             </Typography>
+            {projectionOn ? (
+              <Alert
+                severity="info"
+                icon={false}
+                sx={{
+                  mb: 2,
+                  py: 0.75,
+                  bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.05 : 0.04),
+                  color: 'text.secondary',
+                  border: '1px dashed',
+                  borderColor: 'divider',
+                  '& .MuiAlert-message': { py: 0 },
+                }}
+              >
+                <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.55 }}>
+                  <strong>Hatched bars are an estimate</strong>, not recorded spend — projected to 31 December
+                  from {forecast.basis.history_days} days of history
+                  {forecast.basis.confidence === 'high' ? '' : ` (${forecast.basis.confidence} confidence)`}.
+                  Seasonal consumption is modelled, so the winter months are higher: a battery car spends
+                  stored energy on cabin heat and warming the pack, where an engine reuses its own waste heat.
+                </Typography>
+              </Alert>
+            ) : null}
             <Box sx={{ width: '100%', height: isMobile ? 240 : 320 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={data.monthly_trend || []} margin={{ left: 4, right: 4 }}>
+                <ComposedChart data={chartData} margin={{ left: 4, right: 4 }}>
+                  {/* Hatching as well as fading, so the projection reads as an estimate
+                      without depending on the colour difference alone.
+
+                      A hatched fill averages towards its background, which on a light
+                      card leaves far too little contrast on its own — measured around
+                      1.5:1. The outline is what carries the 3:1 a chart element needs,
+                      so it is near-opaque in light mode and the hatch is texture on
+                      top of that. */}
+                  <defs>
+                    <pattern id="projectedDriving" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                      <rect width="7" height="7" fill={alpha(theme.palette.primary.main, isLight ? 0.22 : 0.16)} />
+                      <line x1="0" y1="0" x2="0" y2="7" stroke={alpha(theme.palette.primary.main, isLight ? 0.75 : 0.55)} strokeWidth="2.5" />
+                    </pattern>
+                    <pattern id="projectedOther" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                      <rect width="7" height="7" fill={alpha(theme.palette.secondary.main, isLight ? 0.22 : 0.16)} />
+                      <line x1="0" y1="0" x2="0" y2="7" stroke={alpha(theme.palette.secondary.main, isLight ? 0.75 : 0.55)} strokeWidth="2.5" />
+                    </pattern>
+                  </defs>
                   <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                  <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
+                  <XAxis dataKey="period" tickFormatter={trendTick} axisLine={false} tickLine={false}
+                    interval="preserveStartEnd" minTickGap={16}
                     tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
                   <YAxis yAxisId="cost" tickFormatter={compact} axisLine={false} tickLine={false} width={48}
                     tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
                   <YAxis yAxisId="eff" orientation="right" tickFormatter={compact} axisLine={false} tickLine={false} width={48}
                     tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [huf(value), name]} />
+                  <Tooltip contentStyle={tooltipStyle} labelFormatter={trendTooltipLabel}
+                    formatter={(value, name) => [huf(value), name]} />
                   <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
-                  <Bar yAxisId="cost" dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+                  <Bar yAxisId="cost" dataKey="session_cost" name="Driving spend" stackId="cost"
                     fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-                  <Bar yAxisId="cost" dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                  <Bar yAxisId="cost" dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
                     fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
-                  <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" name="Cost per 100 km"
-                    stroke={theme.palette.warning.main} strokeWidth={2} dot={false} isAnimationActive={chartAnimation} />
+                  {/* Two separate conditionals rather than one fragment: Recharts
+                      builds its series by walking its direct children and does not
+                      descend into a Fragment, which left the projected bars inheriting
+                      the first two bars' colour and legend name. */}
+                  {projectionOn ? (
+                    <Bar yAxisId="cost" dataKey="projected_session_cost" name="Projected driving" stackId="cost"
+                      fill="url(#projectedDriving)" stroke={alpha(theme.palette.primary.main, isLight ? 0.9 : 0.6)} strokeDasharray="4 3"
+                      isAnimationActive={chartAnimation} />
+                  ) : null}
+                  {projectionOn ? (
+                    <Bar yAxisId="cost" dataKey="projected_expense_cost" name="Projected other" stackId="cost" radius={[8, 8, 0, 0]}
+                      fill="url(#projectedOther)" stroke={alpha(theme.palette.secondary.main, isLight ? 0.9 : 0.6)} strokeDasharray="4 3"
+                      isAnimationActive={chartAnimation} />
+                  ) : null}
+                  <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" name={`Cost per 100 ${fmt.distanceShort}`}
+                    stroke={theme.palette.warning.main} strokeWidth={2} dot={false} connectNulls={false}
+                    isAnimationActive={chartAnimation} />
                 </ComposedChart>
               </ResponsiveContainer>
             </Box>
@@ -402,13 +574,13 @@ const Analytics = () => {
                       <TableCell
                         key={col.id}
                         align={col.numeric ? 'right' : 'left'}
-                        sortDirection={orderBy === col.id ? order : false}
-                        aria-sort={orderBy === col.id ? (order === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        sortDirection={orderBy === (col.sortKey || col.id) ? order : false}
+                        aria-sort={orderBy === (col.sortKey || col.id) ? (order === 'asc' ? 'ascending' : 'descending') : 'none'}
                       >
                         <TableSortLabel
-                          active={orderBy === col.id}
-                          direction={orderBy === col.id ? order : 'asc'}
-                          onClick={() => handleSort(col.id)}
+                          active={orderBy === (col.sortKey || col.id)}
+                          direction={orderBy === (col.sortKey || col.id) ? order : 'asc'}
+                          onClick={() => handleSort(col.sortKey || col.id)}
                         >
                           {col.label}
                         </TableSortLabel>
@@ -421,12 +593,12 @@ const Analytics = () => {
                     <TableRow key={vehicle.id} hover>
                       {COLUMNS.map((col) => (
                         <TableCell key={col.id} align={col.numeric ? 'right' : 'left'} sx={{ whiteSpace: 'nowrap' }}>
-                          {col.id === 'name' ? (
+                          {(col.sortKey || col.id) === 'name' ? (
                             <Stack direction="row" spacing={1} alignItems="center">
                               <Typography variant="body2" fontWeight={700}>{vehicle.name}</Typography>
                               <Chip size="small" variant="outlined" label={vehicle.fuel_type} />
                             </Stack>
-                          ) : col.format(Number(vehicle[col.id] || 0))}
+                          ) : col.format(Number(vehicle[col.sortKey || col.id] || 0))}
                         </TableCell>
                       ))}
                     </TableRow>
@@ -442,9 +614,9 @@ const Analytics = () => {
               <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Driving vs other costs</Typography>
               <Stack spacing={2.5}>
                 {[
-                  { label: 'Driving spend', value: summary.session_cost_huf, pct: summary.session_share_pct,
+                  { label: 'Driving spend', value: summary.session_cost, pct: summary.session_share_pct,
                     color: theme.palette.primary.main, hint: 'Charging and fuel' },
-                  { label: 'Other costs', value: summary.expense_cost_huf, pct: summary.expense_share_pct,
+                  { label: 'Other costs', value: summary.expense_cost, pct: summary.expense_share_pct,
                     color: theme.palette.secondary.main, hint: 'Insurance, maintenance, tax…' },
                 ].map((row) => (
                   <Box key={row.label}>
@@ -524,9 +696,9 @@ const Analytics = () => {
             ) : (
               <>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2 }}>
-                  <Figure label="Total cost" value={huf(drilldown.summary?.total_cost_huf)} color={theme.palette.secondary.main} />
+                  <Figure label="Total cost" value={huf(drilldown.summary?.total_cost)} color={theme.palette.secondary.main} />
                   <Figure label="Distance" value={km(drilldown.summary?.distance_km)} color={theme.palette.primary.main} />
-                  <Figure label="Per 100 km" value={huf(drilldown.summary?.avg_cost_per_100km)} color={theme.palette.warning.main} />
+                  <Figure label={`Per 100 ${fmt.distanceShort}`} value={huf(drilldown.summary?.avg_cost_per_100km)} color={theme.palette.warning.main} />
                   <Figure label="Records" value={String(drilldown.summary?.total_records || 0)} color={theme.palette.success.main} />
                 </Box>
 
@@ -534,17 +706,19 @@ const Analytics = () => {
 
                 <Box sx={{ width: '100%', height: isMobile ? 200 : 260 }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={drilldown.monthly_trend || []} margin={{ left: 4, right: 4 }}>
+                    <ComposedChart data={drilldown.trend || []} margin={{ left: 4, right: 4 }}>
                       <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                      <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
+                      <XAxis dataKey="period" tickFormatter={drilldownTick} axisLine={false} tickLine={false}
+                        interval="preserveStartEnd" minTickGap={16}
                         tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
                       <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
                         tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                      <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [huf(value), name]} />
+                      <Tooltip contentStyle={tooltipStyle} labelFormatter={drilldownTooltipLabel}
+                        formatter={(value, name) => [huf(value), name]} />
                       <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
-                      <Bar dataKey="session_cost_huf" name="Driving spend" stackId="cost"
+                      <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
                         fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-                      <Bar dataKey="expense_cost_huf" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                      <Bar dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
                         fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
                     </ComposedChart>
                   </ResponsiveContainer>

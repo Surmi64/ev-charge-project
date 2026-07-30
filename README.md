@@ -1,6 +1,6 @@
-# GarageOS
+# Mileage
 
-GarageOS is a personal vehicle operations ledger for tracking charging, fueling, and ownership costs with a FastAPI backend and a Vite + React frontend. The current Phase 0 setup is aligned for a clean database start and initializes PostgreSQL directly from the repository bootstrap schema.
+Mileage is a personal vehicle operations ledger for tracking charging, fueling, and ownership costs with a FastAPI backend and a Vite + React frontend. The current Phase 0 setup is aligned for a clean database start and initializes PostgreSQL directly from the repository bootstrap schema.
 
 ## What this repo contains
 
@@ -119,9 +119,9 @@ npm run dev
 You can build each image manually if you prefer not to use the compose build step:
 
 ```powershell
-cd backend; docker build -t garageos_backend .; cd ..
+cd backend; docker build -t mileage_backend .; cd ..
 
-cd frontend; docker build -t garageos_frontend .; cd ..
+cd frontend; docker build -t mileage_frontend .; cd ..
 ```
 
 ## Kubernetes (k8s)

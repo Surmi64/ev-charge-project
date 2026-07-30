@@ -10,6 +10,7 @@ except ModuleNotFoundError:
 ELECTRIC_FUEL_TYPES = {'electric'}
 HYBRID_FUEL_TYPES = {'hybrid'}
 COMBUSTION_FUEL_TYPES = {'petrol', 'diesel'}
+HYDROGEN_FUEL_TYPES = {'hydrogen'}
 HEX_COLOR_PATTERN = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
 
@@ -18,7 +19,7 @@ def supports_charging(fuel_type: str | None) -> bool:
 
 
 def supports_fueling(fuel_type: str | None) -> bool:
-    return fuel_type in COMBUSTION_FUEL_TYPES or fuel_type in HYBRID_FUEL_TYPES
+    return fuel_type in COMBUSTION_FUEL_TYPES or fuel_type in HYBRID_FUEL_TYPES or fuel_type in HYDROGEN_FUEL_TYPES
 
 
 def normalize_vehicle_payload(vehicle):

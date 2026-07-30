@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Paper, Typography, TextField, Button, Divider, CircularProgress, Chip, Stack, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { useAuth } from '../context/useAuth';
+import UnitSettings from './UnitSettings';
 import { toast } from 'sonner';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -201,6 +202,8 @@ const Profile = () => {
                         </Button>
                     </form>
                 </Paper>
+
+                <UnitSettings />
 
                 <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper', boxShadow: `0 0 24px ${alpha(theme.palette.secondary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
                     <Typography className="industrial-kicker" sx={{ mb: 0.5 }}>Telemetry</Typography>

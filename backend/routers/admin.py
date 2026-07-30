@@ -9,6 +9,7 @@ try:
     from backend.schemas import SubscriptionUpdateRequest, UserRoleUpdateRequest
     from backend.billing import serialize_subscription, start_paid_period
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, PLAN_PRICES, TRIAL_DAYS
+    from backend.site_settings import SETTING_DEFINITIONS, get_site_settings, save_site_settings
 except ModuleNotFoundError:
     from auth_utils import create_refresh_token, hash_token
     from config import IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
@@ -18,6 +19,7 @@ except ModuleNotFoundError:
     from schemas import SubscriptionUpdateRequest, UserRoleUpdateRequest
     from billing import serialize_subscription, start_paid_period
     from config import BOOTSTRAP_ADMIN_EMAIL, PLAN_PRICES, TRIAL_DAYS
+    from site_settings import SETTING_DEFINITIONS, get_site_settings, save_site_settings
 
 router = APIRouter(prefix='/admin', tags=['admin'])
 
@@ -266,3 +268,37 @@ def revoke_user_sessions(
     )
     db.commit()
     return {'message': 'User sessions revoked successfully', 'revoked_sessions': revoked_count}
+
+@router.get('/site-settings')
+def read_site_settings(admin=Depends(require_admin_user), db=Depends(get_db)):
+    return {
+        'settings': get_site_settings(db),
+        # What the deployment would fall back to, so the form can show which values
+        # are an admin's choice and which are simply inherited from the environment.
+        'defaults': {key: definition['env_default']() for key, definition in SETTING_DEFINITIONS.items()},
+    }
+
+
+@router.patch('/site-settings')
+def update_site_settings(payload: dict, request: Request, admin=Depends(require_admin_user), db=Depends(get_db)):
+    updates = payload.get('settings') if isinstance(payload.get('settings'), dict) else payload
+    if not isinstance(updates, dict) or not updates:
+        raise HTTPException(status_code=400, detail='No settings supplied')
+
+    try:
+        settings = save_site_settings(db, updates, admin_user_id=admin['id'])
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    log_auth_event(
+        db, 'site_settings_update', 'success', user_id=admin['id'], email=admin['email'],
+        ip_address=get_client_ip(request), details={'keys': sorted(updates.keys())},
+    )
+    db.commit()
+    return {'settings': settings}

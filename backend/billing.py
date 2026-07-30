@@ -13,10 +13,12 @@ from fastapi import Depends, HTTPException
 try:
     from backend.auth_utils import get_current_user_id
     from backend.config import PLAN_PRICES, TRIAL_DAYS
+    from backend.site_settings import get_site_setting
     from backend.db import get_db, set_tenant, table_exists
 except ModuleNotFoundError:
     from auth_utils import get_current_user_id
     from config import PLAN_PRICES, TRIAL_DAYS
+    from site_settings import get_site_setting
     from db import get_db, set_tenant, table_exists
 
 # Statuses that may create or modify records. Everything else is read-only, which
@@ -52,7 +54,10 @@ def ensure_subscription(db, user_id) -> dict:
             ON CONFLICT (user_id) DO NOTHING
             RETURNING *;
             """,
-            (user_id, TRIAL_DAYS),
+            # Admin-set trial length where one exists, the deployed TRIAL_DAYS
+            # otherwise. Read per trial creation rather than cached, so changing it in
+            # the admin page applies to the very next sign-up.
+            (user_id, get_site_setting(db, 'trial_days')),
         )
         subscription = cur.fetchone()
         db.commit()

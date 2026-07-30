@@ -2,8 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from backend.db import get_db, table_exists
+    from backend.site_settings import get_site_settings
 except ModuleNotFoundError:
     from db import get_db, table_exists
+    from site_settings import get_site_settings
 
 router = APIRouter(tags=['health'])
 
@@ -61,3 +63,22 @@ def readiness_check(db=Depends(get_db)):
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail={'status': 'not_ready', 'database': 'error', 'reason': str(exc)})
+
+@router.get('/site/config')
+def public_site_config(db=Depends(get_db)):
+    """The handful of site settings the sign-in screen needs before anyone is signed in.
+
+    Deliberately a whitelist rather than the whole settings object: this endpoint is
+    unauthenticated, so trial length, default currency and anything added later stay
+    behind the admin API unless they are explicitly published here.
+    """
+    try:
+        settings = get_site_settings(db)
+    except Exception:
+        # Never let a settings problem break the login screen; the safe answer is the
+        # ordinary one.
+        return {'registration_open': True, 'maintenance_notice': ''}
+    return {
+        'registration_open': settings['registration_open'],
+        'maintenance_notice': settings['maintenance_notice'],
+    }

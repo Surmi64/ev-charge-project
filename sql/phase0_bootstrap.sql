@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS users (
     email_verified_at TIMESTAMPTZ,
     last_login_at TIMESTAMPTZ,
     dismissed_alerts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Display preferences. Distance and volume are converted from the canonical
+    -- kilometres/litres; currency is a label only and is never converted.
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
+    distance_unit VARCHAR(4) NOT NULL DEFAULT 'km' CHECK (distance_unit IN ('km', 'mi')),
+    volume_unit VARCHAR(8) NOT NULL DEFAULT 'l' CHECK (volume_unit IN ('l', 'gal_us', 'gal_uk')),
+    -- NULL until the account has been through (or skipped) onboarding.
+    onboarded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -78,7 +85,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     name VARCHAR(120),
     make VARCHAR(80) NOT NULL,
     model VARCHAR(80) NOT NULL,
-    fuel_type VARCHAR(20) NOT NULL DEFAULT 'electric' CHECK (fuel_type IN ('electric', 'hybrid', 'petrol', 'diesel')),
+    fuel_type VARCHAR(20) NOT NULL DEFAULT 'electric' CHECK (fuel_type IN ('electric', 'hybrid', 'petrol', 'diesel', 'hydrogen')),
     year INTEGER,
     license_plate VARCHAR(20),
     battery_capacity_kwh NUMERIC(10,2),
@@ -168,14 +175,14 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     end_time TIMESTAMPTZ,
     kwh NUMERIC(10,2),
     fuel_liters NUMERIC(10,2),
-    cost_huf NUMERIC(12,2) NOT NULL,
+    cost_amount NUMERIC(12,2) NOT NULL,
     source VARCHAR(80) NOT NULL,
     battery_level_start SMALLINT,
     battery_level_end SMALLINT,
     odometer NUMERIC(10,1),
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT charging_sessions_cost_chk CHECK (cost_huf >= 0),
+    CONSTRAINT charging_sessions_cost_chk CHECK (cost_amount >= 0),
     CONSTRAINT charging_sessions_kwh_chk CHECK (kwh IS NULL OR kwh >= 0),
     CONSTRAINT charging_sessions_fuel_liters_chk CHECK (fuel_liters IS NULL OR fuel_liters >= 0),
     CONSTRAINT charging_sessions_battery_start_chk CHECK (battery_level_start IS NULL OR battery_level_start BETWEEN 0 AND 100),
@@ -245,7 +252,23 @@ CREATE INDEX IF NOT EXISTS subscriptions_status_idx ON subscriptions (status, cu
 -- ---------------------------------------------------------------------------
 -- Tenant isolation (Alembic 20260721_000007)
 --
--- The API connects as garageos_app, which must not be a superuser and must not
+-- ---------------------------------------------------------------------------
+-- Site settings (Alembic 20260730_000014)
+--
+-- Key/value so adding a setting does not need a migration. Deliberately outside row
+-- level security: every other table here is tenant data keyed by user_id, this is one
+-- global set that admins write and the app reads while serving anyone, including
+-- during registration when no identity exists yet.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS site_settings (
+    key VARCHAR(64) PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- The API connects as mileage_app, which must not be a superuser and must not
 -- have BYPASSRLS, otherwise these policies are silently skipped. get_tenant_db
 -- sets app.user_id once per request; a query that forgets its WHERE clause then
 -- returns no rows instead of every row.
@@ -253,18 +276,18 @@ CREATE INDEX IF NOT EXISTS subscriptions_status_idx ON subscriptions (status, cu
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'garageos_app') THEN
-        CREATE ROLE garageos_app LOGIN PASSWORD 'garageos_app_password'
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mileage_app') THEN
+        CREATE ROLE mileage_app LOGIN PASSWORD 'mileage_app_password'
             NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
     END IF;
 END
 $$;
 
-GRANT USAGE ON SCHEMA public TO garageos_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO garageos_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO garageos_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO garageos_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO garageos_app;
+GRANT USAGE ON SCHEMA public TO mileage_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mileage_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mileage_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mileage_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO mileage_app;
 
 DO $$
 DECLARE
@@ -313,7 +336,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260721_000008'
+SELECT '20260730_000014'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

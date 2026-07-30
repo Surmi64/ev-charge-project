@@ -132,7 +132,7 @@ class ChargingSessionCreate(BaseModel):
     end_time: Optional[str] = None
     kwh: Optional[float] = None
     fuel_liters: Optional[float] = None
-    cost_huf: float
+    cost_amount: float
     source: str
     battery_level_start: Optional[int] = None
     battery_level_end: Optional[int] = None

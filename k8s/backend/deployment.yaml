@@ -29,12 +29,12 @@ spec:
               value: "production"
             # Required: outside development, config.py refuses to start without this
             # and also rejects the known insecure defaults. Create the secret first:
-            #   kubectl create secret generic garageos-secrets \
+            #   kubectl create secret generic mileage-secrets \
             #     --from-literal=JWT_SECRET_KEY="$(openssl rand -hex 32)"
             - name: JWT_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: garageos-secrets
+                  name: mileage-secrets
                   key: JWT_SECRET_KEY
             - name: DB_HOST
               value: "192.168.0.111"

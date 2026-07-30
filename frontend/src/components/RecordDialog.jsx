@@ -23,6 +23,8 @@ import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { getAllowedSessionTypes } from '../utils/vehicleRules';
 import { EXPENSE_CATEGORIES } from '../utils/expenseCategories';
+import { useAuth } from '../context/useAuth';
+import { createFormatters } from '../utils/units';
 
 const RECORD_TYPES = [
   { value: 'charging', label: 'Charging', icon: <ChargingIcon fontSize="small" /> },
@@ -50,7 +52,7 @@ const emptyForm = () => ({
   battery_level_start: '',
   battery_level_end: '',
   category: 'maintenance',
-  currency: 'HUF',
+  currency: '',
   date: today(),
   notes: '',
 });
@@ -64,6 +66,8 @@ const emptyForm = () => ({
  * follows from it.
  */
 const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
+  const { user } = useAuth();
+  const fmt = useMemo(() => createFormatters(user), [user]);
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [attempted, setAttempted] = useState(false);
@@ -76,6 +80,11 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
     () => vehicles.find((v) => String(v.id) === String(form.vehicle_id)),
     [vehicles, form.vehicle_id],
   );
+  // Hydrogen is sold by the kilogram, so the fuel field shows kg regardless of the
+  // account's volume unit. The value goes in the same fuel_liters column — it is just
+  // a quantity — but it is a mass, not a volume, so it is never converted to gallons.
+  const isHydrogen = form.type === 'fueling' && selectedVehicle?.fuel_type === 'hydrogen';
+  const fuelUnit = isHydrogen ? 'kg' : fmt.volumeShort;
   const allowedSessionTypes = useMemo(
     () => (selectedVehicle ? getAllowedSessionTypes(selectedVehicle.fuel_type) : ['charging', 'fueling']),
     [selectedVehicle],
@@ -134,7 +143,7 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
           end_time: form.end_time || null,
           kwh: form.type === 'charging' ? num(form.kwh) : null,
           fuel_liters: form.type === 'fueling' ? num(form.fuel_liters) : null,
-          cost_huf: Number(form.cost),
+          cost_amount: Number(form.cost),
           source: form.source || 'manual',
           battery_level_start: num(form.battery_level_start),
           battery_level_end: num(form.battery_level_end),
@@ -145,7 +154,7 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
           vehicle_id: form.vehicle_id === '' ? null : Number(form.vehicle_id),
           category: form.category,
           amount: Number(form.cost),
-          currency: form.currency || 'HUF',
+          currency: form.currency || fmt.currency,
           date: form.date,
           description: form.notes || null,
         };
@@ -250,20 +259,20 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                     />
                   ) : (
                     <TextField
-                      label="Fuel (litres)" type="number" fullWidth
+                      label={`Fuel (${fuelUnit})`} type="number" fullWidth
                       value={form.fuel_liters} onChange={set('fuel_liters')}
                       error={bad('fuel_liters')} helperText={helper('fuel_liters', 'Required')}
                     />
                   )}
                   <TextField
-                    label="Cost (HUF)" type="number" fullWidth
+                    label={`Cost (${fmt.currency})`} type="number" fullWidth
                     value={form.cost} onChange={set('cost')}
                     error={bad('cost')} helperText={helper('cost', 'Required')}
                   />
                 </Stack>
 
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <TextField label="Odometer (km)" type="number" fullWidth
+                  <TextField label={`Odometer (${fmt.distanceShort})`} type="number" fullWidth
                     value={form.odometer} onChange={set('odometer')} helperText="Optional" />
                   <TextField label="Source" fullWidth
                     value={form.source} onChange={set('source')} helperText="Home, Ionity, MOL…" />
@@ -299,7 +308,7 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                     value={form.cost} onChange={set('cost')}
                     error={bad('cost')} helperText={helper('cost', 'Required')}
                   />
-                  <TextField label="Currency" fullWidth value={form.currency} onChange={set('currency')} />
+                  <TextField label="Currency" fullWidth value={form.currency || fmt.currency} onChange={set('currency')} />
                 </Stack>
               </>
             )}

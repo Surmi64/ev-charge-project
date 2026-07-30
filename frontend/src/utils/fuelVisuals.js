@@ -31,6 +31,13 @@ const FUEL_VISUALS = {
     text: '#FBEACC',
     textLight: '#915E16',
   },
+  hydrogen: {
+    primary: '#3FE0D0',
+    secondary: '#2AA9C4',
+    border: '#35C4B5',
+    text: '#D2FFF9',
+    textLight: '#13786E',
+  },
 };
 
 export function getFuelVisual(fuelType) {

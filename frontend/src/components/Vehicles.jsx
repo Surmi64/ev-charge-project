@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box, Typography, Button, Paper, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, IconButton, Dialog, DialogTitle, DialogContent,
@@ -19,6 +19,8 @@ import { toast } from 'sonner';
 import { requiresBatteryCapacity } from '../utils/vehicleRules';
 import { getFuelBoxSx, getFuelChipSx } from '../utils/fuelVisuals';
 import { TableSectionSkeleton } from './SectionSkeletons';
+import { useAuth } from '../context/useAuth';
+import { createFormatters } from '../utils/units';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 
@@ -32,13 +34,18 @@ const FUEL_TYPES = [
 const supportsFueling = (fuelType) => fuelType === 'hybrid' || fuelType === 'petrol' || fuelType === 'diesel';
 const HEX_COLOR_PATTERN = /^#[0-9A-F]{6}$/i;
 
-const getVehicleSpecs = (vehicle) => {
+// kWh needs no conversion; tank and odometer follow the account's units.
+const getVehicleSpecs = (vehicle, fmt) => {
   const specs = [];
 
   if (vehicle.year) specs.push(String(vehicle.year));
   if (vehicle.battery_capacity_kwh) specs.push(`${Number(vehicle.battery_capacity_kwh).toLocaleString()} kWh battery`);
-  if (vehicle.tank_capacity_liters) specs.push(`${Number(vehicle.tank_capacity_liters).toLocaleString()} L tank`);
-  if (vehicle.starting_odometer_km) specs.push(`${Number(vehicle.starting_odometer_km).toLocaleString()} km start`);
+  if (vehicle.tank_capacity_liters) {
+    specs.push(vehicle.fuel_type === 'hydrogen'
+      ? `${Number(vehicle.tank_capacity_liters).toLocaleString()} kg tank`
+      : `${fmt.volume(vehicle.tank_capacity_liters)} tank`);
+  }
+  if (vehicle.starting_odometer_km) specs.push(`${fmt.distance(vehicle.starting_odometer_km)} start`);
 
   return specs.length ? specs.join(' • ') : 'No specs yet';
 };
@@ -81,6 +88,10 @@ const validateVehicleForm = (formData) => {
 };
 
 const Vehicles = () => {
+  const { user } = useAuth();
+  const fmt = useMemo(() => createFormatters(user), [user]);
+  // Hydrogen tanks are rated in kg, not volume.
+  const tankUnit = (fuelType) => (fuelType === 'hydrogen' ? 'kg' : fmt.volumeShort);
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
   // Skip the placeholder entirely when the data beats the delay.
@@ -322,7 +333,7 @@ const Vehicles = () => {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2">{v.make} {v.model}</Typography>
-                    <Typography variant="caption" color="text.secondary">{getVehicleSpecs(v)}</Typography>
+                    <Typography variant="caption" color="text.secondary">{getVehicleSpecs(v, fmt)}</Typography>
                   </TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
@@ -412,7 +423,7 @@ const Vehicles = () => {
                 Review the highlighted fields before saving this vehicle.
               </Alert>
             ) : null}
-            <TextField label="Nickname" fullWidth value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} helperText="Optional label for quick recognition in lists and forms." />
+            <TextField label="Car name" fullWidth value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} helperText="Optional — what you call this car, shown instead of make and model." />
             <Box display="flex" gap={2}>
               <TextField label="Make" required fullWidth value={formData.make} onChange={e => setFormData({...formData, make: e.target.value})} error={submitAttempted && !!formErrors.make} helperText={submitAttempted ? formErrors.make || 'Required' : 'Required'} />
               <TextField label="Model" required fullWidth value={formData.model} onChange={e => setFormData({...formData, model: e.target.value})} error={submitAttempted && !!formErrors.model} helperText={submitAttempted ? formErrors.model || 'Required' : 'Required'} />
@@ -443,7 +454,7 @@ const Vehicles = () => {
                     <TextField label="Battery Capacity (kWh)" type="number" fullWidth value={formData.battery_capacity_kwh} onChange={e => setFormData({...formData, battery_capacity_kwh: e.target.value})} error={submitAttempted && !!formErrors.battery_capacity_kwh} helperText={submitAttempted ? formErrors.battery_capacity_kwh || 'Optional for EVs and hybrids.' : 'Optional for EVs and hybrids.'} />
                   ) : null}
                   {supportsFueling(formData.fuel_type) ? (
-                    <TextField label="Tank Capacity (L)" type="number" fullWidth value={formData.tank_capacity_liters} onChange={e => setFormData({...formData, tank_capacity_liters: e.target.value})} error={submitAttempted && !!formErrors.tank_capacity_liters} helperText={submitAttempted ? formErrors.tank_capacity_liters || 'Optional for hybrids and fuel vehicles.' : 'Optional for hybrids and fuel vehicles.'} />
+                    <TextField label={`Tank Capacity (${tankUnit(formData.fuel_type)})`} type="number" fullWidth value={formData.tank_capacity_liters} onChange={e => setFormData({...formData, tank_capacity_liters: e.target.value})} error={submitAttempted && !!formErrors.tank_capacity_liters} helperText={submitAttempted ? formErrors.tank_capacity_liters || 'Optional for hybrids and fuel vehicles.' : 'Optional for hybrids and fuel vehicles.'} />
                   ) : null}
                 </Box>
               </Box>
@@ -513,7 +524,7 @@ const Vehicles = () => {
         <DialogTitle>Delete Vehicle</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">
-            Delete this vehicle? If it already has linked history, GarageOS will archive it instead so those records stay intact.
+            Delete this vehicle? If it already has linked history, Mileage will archive it instead so those records stay intact.
           </Typography>
           {pendingDeleteVehicle ? (
             <Typography sx={{ mt: 1.5, fontWeight: 700 }}>

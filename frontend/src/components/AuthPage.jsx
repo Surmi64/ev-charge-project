@@ -1,203 +1,272 @@
-import React, { useEffect, useState } from 'react';
-import { Box, TextField, Button, Typography, Paper, Container, Tab, Tabs, Stack, Chip, Link, useTheme } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import { useAuth } from '../context/useAuth';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Box, Button, CircularProgress, Link, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/useAuth';
+import AuthLayout from './AuthLayout';
+import PasswordField from './PasswordField';
+import { isPasswordValid, isValidEmail } from '../utils/passwordPolicy';
+import { useSiteConfig } from '../utils/useSiteConfig';
+
+const LOGIN = 0;
+const REGISTER = 1;
+
+// Raw fetch rather than utils/api's apiFetch, which is otherwise the only way to call
+// the API. apiFetch attaches the stored token and retries through a refresh on 401 —
+// on this page a 401 means "wrong password", and treating it as an expired session
+// would fire a pointless refresh and sign out whoever was already logged in.
+const postJson = async (path, body) => {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(data.detail || data.error || 'Something went wrong. Please try again.');
+    // Registration conflicts name the colliding field, so the message can sit under
+    // the input the user has to change rather than only at the top of the form.
+    error.field = data.field || null;
+    throw error;
+  }
+  return data;
+};
 
 const AuthPage = ({ mode = 'login' }) => {
-    const [tab, setTab] = useState(mode === 'register' ? 1 : 0);
-    const [username, setUsername] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const { login, authenticated } = useAuth();
-    const navigate = useNavigate();
-    const theme = useTheme();
+  const [tab, setTab] = useState(mode === 'register' ? REGISTER : LOGIN);
+  const [values, setValues] = useState({ username: '', email: '', password: '' });
+  const [touched, setTouched] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
+  // Server-side rejections keyed by field, e.g. a name already in use. Cleared as
+  // soon as that field is edited, so the message never outlives the problem.
+  const [serverErrors, setServerErrors] = useState({});
+  const { login, authenticated } = useAuth();
+  const navigate = useNavigate();
+  const { registration_open: registrationOpen, loaded: configLoaded } = useSiteConfig();
 
-    useEffect(() => {
-        setTab(mode === 'register' ? 1 : 0);
-    }, [mode]);
+  const usernameRef = useRef(null);
+  const emailRef = useRef(null);
+  const passwordRef = useRef(null);
 
-    useEffect(() => {
-        if (authenticated) {
-            navigate('/');
-        }
-    }, [authenticated, navigate]);
+  // Falls back to the sign-in tab when an admin has closed registration, including
+  // for someone who followed a /register link. The server refuses these anyway; this
+  // just avoids offering a form that cannot succeed.
+  const isRegister = tab === REGISTER && registrationOpen;
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        const endpoint = tab === 0 ? '/api/auth/login' : '/api/auth/register';
-        const body = tab === 0 ? { email, password } : { username, email, password };
-        
-        try {
-            const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await res.json();
-            if (res.ok) {
-                if (tab === 0) {
-                    login(data.user, data.access_token, data.refresh_token);
-                    toast.success(`Welcome back, ${data.user.username}!`);
-                    navigate('/');
-                } else {
-                    toast.success('Account created. You can sign in now.');
-                    setPassword('');
-                    navigate('/login');
-                }
-            } else {
-                toast.error(data.detail || data.error || 'Something went wrong');
-            }
-        } catch {
-            toast.error('Connection error');
-        }
-    };
+  useEffect(() => {
+    setTab(mode === 'register' ? REGISTER : LOGIN);
+  }, [mode]);
 
-    const handleTabChange = (event, value) => {
-        setTab(value);
-        navigate(value === 0 ? '/login' : '/register');
-    };
+  useEffect(() => {
+    if (authenticated) navigate('/');
+  }, [authenticated, navigate]);
 
-    return (
-        <Box className="auth-shell">
-            <Container maxWidth="lg">
-                <Box
-                    sx={{
-                        display: 'grid',
-                        gridTemplateColumns: { xs: '1fr', md: '1.1fr 0.9fr' },
-                        gap: 3,
-                        alignItems: 'stretch',
-                    }}
-                >
-                    <Paper
-                        sx={{
-                            p: { xs: 3, md: 4 },
-                            borderRadius: 4,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'space-between',
-                            minHeight: { xs: 260, md: 620 },
-                            position: 'relative',
-                            overflow: 'hidden',
-                        }}
-                    >
-                                                <Box
-                                                    sx={{
-                                                        position: 'absolute',
-                                                        inset: 0,
-                                                        opacity: theme.palette.mode === 'dark' ? 0.2 : 0.3,
-                                                        pointerEvents: 'none',
-                                                        backgroundImage: `linear-gradient(${alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.05)} 1px, transparent 1px), linear-gradient(90deg, ${alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.05)} 1px, transparent 1px)`,
-                                                        backgroundSize: '32px 32px',
-                                                    }}
-                                                />
-                        <Box sx={{ position: 'relative' }}>
-                            <Typography className="industrial-kicker">Industrial Ops Dashboard</Typography>
-                            <Typography className="industrial-title">GarageOS Control</Typography>
-                            <Typography className="industrial-subtitle">
-                                Track charging, service, insurance, and every operational cost from a darker, sharper command surface built for daily use.
-                            </Typography>
-                        </Box>
+  // Field-level messages. Registration holds the password to the server's policy;
+  // signing in only checks that something was typed, because an existing password
+  // predates whatever the policy says today and rejecting it here would lock the
+  // account out of its own login form.
+  const errors = useMemo(() => {
+    const next = {};
+    if (isRegister && values.username.trim().length < 2) {
+      next.username = 'Please enter a name of at least 2 characters.';
+    }
+    if (!values.email.trim()) next.email = 'Email address is required.';
+    else if (!isValidEmail(values.email)) next.email = 'That does not look like an email address.';
 
-                        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 3, position: 'relative' }}>
-                            <Chip label="Neon dark shell" color="primary" variant="outlined" />
-                            <Chip label="Vehicle cost intelligence" color="secondary" variant="outlined" />
-                            <Chip label="Single-user control" variant="outlined" />
-                        </Stack>
+    if (!values.password) next.password = 'Password is required.';
+    else if (isRegister && !isPasswordValid(values.password)) {
+      next.password = 'Password does not meet all the requirements below.';
+    }
+    return next;
+  }, [isRegister, values]);
 
-                        <Box
-                            sx={{
-                                position: 'relative',
-                                display: 'grid',
-                                gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
-                                gap: 2,
-                                mt: 4,
-                            }}
-                        >
-                            {[
-                                ['Live Cost Feed', 'Sessions and expenses in one activity rail'],
-                                ['Steel + Neon UI', 'Industrial framing with cyan and magenta edge lighting'],
-                                ['Fast Entry Flow', 'Designed for quick logging on desktop and mobile'],
-                            ].map(([title, text]) => (
-                                <Box
-                                    key={title}
-                                    sx={{
-                                        p: 2,
-                                        borderRadius: 2,
-                                        bgcolor: alpha(theme.palette.common.white, theme.palette.mode === 'dark' ? 0.04 : 0.4),
-                                        border: '1px solid',
-                                        borderColor: 'divider',
-                                        boxShadow: `0 0 22px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.06)}`,
-                                    }}
-                                >
-                                    <Typography variant="h6" sx={{ fontSize: '1rem', mb: 0.5 }}>{title}</Typography>
-                                    <Typography variant="body2" color="text.secondary">{text}</Typography>
-                                </Box>
-                            ))}
-                        </Box>
-                    </Paper>
+  const setField = (name) => (event) => {
+    setValues((previous) => ({ ...previous, [name]: event.target.value }));
+    setFormError('');
+    setServerErrors((previous) => (previous[name] ? { ...previous, [name]: undefined } : previous));
+  };
+  const markTouched = (name) => () => setTouched((previous) => ({ ...previous, [name]: true }));
+  const showError = (name) => serverErrors[name] || (touched[name] ? errors[name] : undefined);
 
-                    <Paper sx={{ p: { xs: 3, md: 4 }, borderRadius: 4, alignSelf: 'center' }}>
-                        <Typography className="industrial-kicker">Access Node</Typography>
-                        <Typography variant="h5" sx={{ mb: 1 }}>Secure Entry</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                            Use your email identity to enter the operational dashboard.
-                        </Typography>
+  const switchTab = useCallback((_event, value) => {
+    setTab(value);
+    setTouched({});
+    setFormError('');
+    setServerErrors({});
+    setValues((previous) => ({ ...previous, password: '' }));
+    navigate(value === REGISTER ? '/register' : '/login');
+  }, [navigate]);
 
-                        <Tabs value={tab} onChange={handleTabChange} centered sx={{ mb: 3 }}>
-                            <Tab label="Sign In" />
-                            <Tab label="Register" />
-                        </Tabs>
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (submitting) return;
 
-                        <form onSubmit={handleSubmit}>
-                            <Stack spacing={2}>
-                                {tab === 1 && (
-                                    <TextField
-                                        fullWidth
-                                        label="Display Name"
-                                        value={username}
-                                        onChange={(e) => setUsername(e.target.value)}
-                                    />
-                                )}
-                                <TextField
-                                    fullWidth
-                                    label="Email"
-                                    type="email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                />
-                                <TextField
-                                    fullWidth
-                                    label="Password"
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                />
-                                <Button type="submit" fullWidth variant="contained" sx={{ mt: 1, py: 1.6 }}>
-                                    {tab === 0 ? 'Sign In' : 'Create Account'}
-                                </Button>
-                                {tab === 0 ? (
-                                    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                        <Link
-                                            component="button"
-                                            type="button"
-                                            underline="hover"
-                                            color="primary"
-                                            onClick={() => navigate('/forgot-password')}
-                                            sx={{ fontWeight: 600, letterSpacing: '0.04em' }}
-                                        >
-                                            Forgot password?
-                                        </Link>
-                                    </Box>
-                                ) : null}
-                            </Stack>
-                        </form>
-                    </Paper>
-                </Box>
-            </Container>
-        </Box>
-    );
+    const fieldOrder = isRegister ? ['username', 'email', 'password'] : ['email', 'password'];
+    const firstInvalid = fieldOrder.find((name) => errors[name]);
+    if (firstInvalid) {
+      // Reveal every message at once, then put the cursor on the first problem rather
+      // than leaving the user to hunt for it.
+      setTouched({ username: true, email: true, password: true });
+      ({ username: usernameRef, email: emailRef, password: passwordRef })[firstInvalid].current?.focus();
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError('');
+    setServerErrors({});
+    try {
+      if (isRegister) {
+        await postJson('/api/auth/register', {
+          username: values.username.trim(),
+          email: values.email.trim(),
+          password: values.password,
+        });
+        // Straight in rather than bouncing to the sign-in form: the credentials were
+        // just typed and verified, so asking for them again is pure friction.
+        const session = await postJson('/api/auth/login', {
+          email: values.email.trim(),
+          password: values.password,
+        });
+        login(session.user, session.access_token, session.refresh_token);
+        toast.success(`Welcome to Mileage, ${session.user.username}.`);
+      } else {
+        const session = await postJson('/api/auth/login', {
+          email: values.email.trim(),
+          password: values.password,
+        });
+        login(session.user, session.access_token, session.refresh_token);
+        toast.success(`Welcome back, ${session.user.username}.`);
+      }
+      navigate('/');
+    } catch (error) {
+      toast.error(error.message);
+      if (error.field && ['username', 'email'].includes(error.field)) {
+        setServerErrors({ [error.field]: error.message });
+        ({ username: usernameRef, email: emailRef })[error.field].current?.focus();
+      } else {
+        setFormError(error.message);
+        passwordRef.current?.focus();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AuthLayout
+      kicker={isRegister ? 'Get started' : 'Welcome back'}
+      title={isRegister ? 'Create your account' : 'Sign in'}
+      subtitle={
+        isRegister
+          ? 'Thirty days free, no card needed. You can add your first vehicle straight after.'
+          : 'Enter your email and password to reach your fleet.'
+      }
+      footer={
+        isRegister ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
+            No card required. Your trial simply stops, it does not charge you.
+          </Typography>
+        ) : null
+      }
+    >
+      {registrationOpen ? (
+        <Tabs
+          value={isRegister ? REGISTER : LOGIN}
+          onChange={switchTab}
+          variant="fullWidth"
+          sx={{ mb: 3 }}
+          aria-label="Sign in or create an account"
+        >
+          <Tab label="Sign in" id="auth-tab-login" value={LOGIN} />
+          <Tab label="Create account" id="auth-tab-register" value={REGISTER} />
+        </Tabs>
+      ) : configLoaded ? (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          New registrations are closed at the moment. Existing accounts sign in as usual.
+        </Alert>
+      ) : null}
+
+      <form onSubmit={handleSubmit} noValidate>
+        <Stack spacing={2.25}>
+          {formError ? (
+            // role=alert so the failure is announced; the toast alone is easy to miss
+            // and disappears before a screen reader may reach it.
+            <Alert severity="error" role="alert">{formError}</Alert>
+          ) : null}
+
+          {isRegister ? (
+            <TextField
+              fullWidth
+              required
+              inputRef={usernameRef}
+              label="Your name"
+              value={values.username}
+              onChange={setField('username')}
+              onBlur={markTouched('username')}
+              error={Boolean(showError('username'))}
+              helperText={showError('username') || 'Shown in the app, and unique across accounts.'}
+              autoComplete="name"
+              autoFocus
+            />
+          ) : null}
+
+          <TextField
+            fullWidth
+            required
+            inputRef={emailRef}
+            label="Email"
+            type="email"
+            value={values.email}
+            onChange={setField('email')}
+            onBlur={markTouched('email')}
+            error={Boolean(showError('email'))}
+            helperText={showError('email')}
+            autoComplete="email"
+            autoFocus={!isRegister}
+          />
+
+          <PasswordField
+            inputRef={passwordRef}
+            label="Password"
+            value={values.password}
+            onChange={setField('password')}
+            onBlur={markTouched('password')}
+            error={showError('password')}
+            autoComplete={isRegister ? 'new-password' : 'current-password'}
+            showPolicy={isRegister}
+          />
+
+          {!isRegister ? (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: -0.5 }}>
+              <Link
+                component="button"
+                type="button"
+                underline="hover"
+                onClick={() => navigate('/forgot-password')}
+                sx={{ fontWeight: 600, fontSize: '0.86rem' }}
+              >
+                Forgot your password?
+              </Link>
+            </Box>
+          ) : null}
+
+          <Button
+            type="submit"
+            fullWidth
+            variant="contained"
+            disabled={submitting}
+            sx={{ py: 1.5, mt: 0.5 }}
+            startIcon={submitting ? <CircularProgress size={17} color="inherit" /> : null}
+          >
+            {submitting
+              ? (isRegister ? 'Creating account…' : 'Signing in…')
+              : (isRegister ? 'Create account' : 'Sign in')}
+          </Button>
+        </Stack>
+      </form>
+    </AuthLayout>
+  );
 };
 
 export default AuthPage;
