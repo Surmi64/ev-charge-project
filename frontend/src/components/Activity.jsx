@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -28,6 +29,7 @@ import {
   Delete as DeleteIcon,
   Download as DownloadIcon,
   Edit as EditIcon,
+  Place as PlaceIcon,
   Search as SearchIcon,
   UploadFile as UploadFileIcon,
 } from '@mui/icons-material';
@@ -41,6 +43,10 @@ import { createFormatters } from '../utils/units';
 import { TimelineSectionSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
 import RecurringExpenses from './RecurringExpenses';
+
+// One request per screenful. The API caps a page at 200; 100 keeps the payload small
+// and the "Load more" button meaningful rather than theoretical.
+const PAGE_SIZE = 100;
 
 const TYPE_FILTERS = [
   { value: 'all', label: 'Everything' },
@@ -98,11 +104,17 @@ function Activity() {
   const [editingRecord, setEditingRecord] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  // A full page back means there is probably more behind it. Cheaper than asking the
+  // server for a total on every request, and the button simply stops appearing once a
+  // short page arrives.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const fileInputRef = useRef(null);
 
-  const buildQuery = useCallback(() => {
+  const buildQuery = useCallback((offset = 0) => {
     const params = new URLSearchParams();
-    params.set('limit', '100');
+    params.set('limit', String(PAGE_SIZE));
+    if (offset) params.set('offset', String(offset));
     if (activityType !== 'all') params.set('activity_type', activityType);
     if (vehicleId !== 'all') params.set('vehicle_id', vehicleId);
     if (search.trim()) params.set('search', search.trim());
@@ -113,13 +125,32 @@ function Activity() {
     try {
       const res = await apiFetch(`/api/activity?${buildQuery().toString()}`);
       if (!res.ok) throw new Error();
-      setActivity(await res.json());
+      const rows = await res.json();
+      setActivity(rows);
+      setHasMore(rows.length === PAGE_SIZE);
     } catch {
       toast.error('Could not load your records');
     } finally {
       setLoading(false);
     }
   }, [buildQuery]);
+
+  // Appends rather than replaces, and pages from the length actually on screen, so a
+  // record deleted in the meantime cannot make the next page skip one.
+  const loadMore = useCallback(async () => {
+    setLoadingMore(true);
+    try {
+      const res = await apiFetch(`/api/activity?${buildQuery(activity.length).toString()}`);
+      if (!res.ok) throw new Error();
+      const rows = await res.json();
+      setActivity((previous) => [...previous, ...rows]);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch {
+      toast.error('Could not load more records');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [buildQuery, activity.length]);
 
   useEffect(() => {
     apiFetch('/api/vehicles?include_archived=true')
@@ -171,6 +202,12 @@ function Activity() {
               battery_level_start: row.battery_level_start ?? '',
               battery_level_end: row.battery_level_end ?? '',
               notes: row.notes || '',
+              // Carried through the edit so re-saving does not silently drop the
+              // location off a record that had one.
+              latitude: row.latitude ?? null,
+              longitude: row.longitude ?? null,
+              location_accuracy_m: row.location_accuracy_m ?? null,
+              place_name: row.place_name || '',
             }
           : {
               id: row.id,
@@ -364,6 +401,17 @@ function Activity() {
                           <Typography variant="subtitle1" fontWeight={700}>{item.title}</Typography>
                           <Chip size="small" variant="outlined" label={item.activity_type === 'session' ? 'Session' : 'Cost'} sx={getTypeChipSx(theme, item.activity_type)} />
                           <Chip size="small" variant="outlined" label={formatCategory(item.category)} sx={getCategoryChipSx(theme, item.category)} />
+                          {/* Only when it was named. A bare coordinate is on the record
+                              but means nothing to read, so it is not shown as a chip. */}
+                          {item.place_name ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              icon={<PlaceIcon />}
+                              label={item.place_name}
+                              sx={{ maxWidth: 240 }}
+                            />
+                          ) : null}
                         </Stack>
                         <Typography variant="body2" color="text.secondary">
                           {new Date(item.occurred_at).toLocaleDateString()} · {item.vehicle_name}
@@ -396,6 +444,26 @@ function Activity() {
               })}
             </Paper>
           )}
+
+          {hasMore ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1.5, mt: 2 }}>
+              <Button
+                variant="outlined"
+                onClick={loadMore}
+                disabled={loadingMore}
+                startIcon={loadingMore ? <CircularProgress size={16} color="inherit" /> : null}
+              >
+                {loadingMore ? 'Loading…' : 'Load more'}
+              </Button>
+              <Typography variant="caption" color="text.secondary">
+                {activity.length} shown
+              </Typography>
+            </Box>
+          ) : activity.length > PAGE_SIZE ? (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: 2 }}>
+              All {activity.length} records shown
+            </Typography>
+          ) : null}
         </>
       )}
 

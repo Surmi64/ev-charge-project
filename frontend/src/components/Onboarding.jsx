@@ -3,6 +3,8 @@ import {
   Box,
   Button,
   Card,
+  Checkbox,
+  FormControlLabel,
   MenuItem,
   Stack,
   Step,
@@ -13,6 +15,7 @@ import {
   useTheme,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
+import { supportsHeatPump } from '../utils/vehicleRules';
 import {
   DirectionsCar as CarIcon,
   EvStation as ChargeIcon,
@@ -22,6 +25,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../context/useAuth';
 import { apiFetch } from '../utils/api';
 import { createFormatters, guessPreferencesFromLocale } from '../utils/units';
+import { guessClimateZone } from '../utils/climateGuess';
 
 const FUEL_TYPES = [
   { value: 'electric', label: 'Electric' },
@@ -48,8 +52,14 @@ const Onboarding = () => {
 
   // Pre-filled from the browser locale so the defaults are already close, and so a
   // skip still lands somewhere sensible.
-  const [units, setUnits] = useState(() => guessPreferencesFromLocale());
-  const [vehicle, setVehicle] = useState({ name: '', make: '', model: '', fuel_type: 'electric' });
+  // Climate rides along with the unit guesses: it comes from the same locale, is saved
+  // by the same PATCH, and a skip should leave a plausible zone behind rather than an
+  // unanswered one that silently forecasts a southern account's seasons backwards.
+  const [units, setUnits] = useState(() => ({
+    ...guessPreferencesFromLocale(),
+    climate_zone: guessClimateZone(),
+  }));
+  const [vehicle, setVehicle] = useState({ name: '', make: '', model: '', fuel_type: 'electric', has_heat_pump: false });
 
   useEffect(() => {
     apiFetch('/api/settings/units')
@@ -66,7 +76,11 @@ const Onboarding = () => {
       if (withVehicle && vehicle.make.trim() && vehicle.model.trim()) {
         const res = await apiFetch('/api/vehicles', {
           method: 'POST',
-          body: JSON.stringify({ ...vehicle, is_default: true }),
+          body: JSON.stringify({
+            ...vehicle,
+            has_heat_pump: supportsHeatPump(vehicle.fuel_type) ? !!vehicle.has_heat_pump : null,
+            is_default: true,
+          }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => null);
@@ -157,6 +171,19 @@ const Onboarding = () => {
               </TextField>
             </Stack>
 
+            {/* Not a unit, but it belongs to the same "where are you" question and the
+                same PATCH. It only feeds the cost forecast, so the label says so rather
+                than leaving it looking like another display setting. */}
+            <TextField
+              select fullWidth label="Climate where you drive" value={units.climate_zone}
+              helperText="Used to predict seasonal running costs. Nothing else changes."
+              onChange={(e) => setUnits({ ...units, climate_zone: e.target.value })}
+            >
+              {(options?.climate_zones || []).map((zone) => (
+                <MenuItem key={zone.value} value={zone.value}>{zone.label} — {zone.example}</MenuItem>
+              ))}
+            </TextField>
+
             <Box sx={{ p: 1.75, borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
               <Typography variant="caption" color="text.secondary">Your figures will look like</Typography>
               <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -198,10 +225,36 @@ const Onboarding = () => {
             </Stack>
             <TextField
               select fullWidth label="Fuel type" value={vehicle.fuel_type}
-              onChange={(e) => setVehicle({ ...vehicle, fuel_type: e.target.value })}
+              onChange={(e) => setVehicle({
+                ...vehicle,
+                fuel_type: e.target.value,
+                has_heat_pump: supportsHeatPump(e.target.value) ? vehicle.has_heat_pump : false,
+              })}
             >
               {FUEL_TYPES.map((f) => <MenuItem key={f.value} value={f.value}>{f.label}</MenuItem>)}
             </TextField>
+
+            {supportsHeatPump(vehicle.fuel_type) ? (
+              <FormControlLabel
+                sx={{ alignItems: 'flex-start', ml: 0, gap: 1.25 }}
+                control={
+                  <Checkbox
+                    checked={!!vehicle.has_heat_pump}
+                    onChange={(e) => setVehicle({ ...vehicle, has_heat_pump: e.target.checked })}
+                    sx={{ pt: 0.25 }}
+                  />
+                }
+                label={
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>It has a heat pump</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Tick if you know. It makes the winter cost forecast more accurate, and
+                      you can change it later under Vehicles.
+                    </Typography>
+                  </Box>
+                }
+              />
+            ) : null}
 
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Button color="inherit" onClick={() => setStep(0)} disabled={saving}>Back</Button>

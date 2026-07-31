@@ -16,12 +16,14 @@ try:
         pwd_context,
         validate_password_strength,
     )
+    from backend.climate import ZONES as CLIMATE_ZONES, zone_options
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
     from backend.site_settings import get_site_settings
     from backend.schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
 except ModuleNotFoundError:
     from auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
+    from climate import ZONES as CLIMATE_ZONES, zone_options
     from auth_utils import create_access_token, create_refresh_token, get_current_user_id, hash_token, pwd_context, validate_password_strength
     from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
@@ -97,7 +99,7 @@ def load_user_profile(db, user_id) -> dict | None:
         columns.append('theme_mode')
     if column_exists(db, 'users', 'dismissed_alerts'):
         columns.append('dismissed_alerts')
-    for preference in ('currency', 'distance_unit', 'volume_unit', 'onboarded_at'):
+    for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone', 'onboarded_at'):
         if column_exists(db, 'users', preference):
             columns.append(preference)
 
@@ -112,6 +114,9 @@ def load_user_profile(db, user_id) -> dict | None:
     user.setdefault('currency', 'EUR')
     user.setdefault('distance_unit', 'km')
     user.setdefault('volume_unit', 'l')
+    # Left as None rather than defaulted: the client has to be able to tell an account
+    # that answered "temperate continental" from one that was never asked.
+    user.setdefault('climate_zone', None)
     user['onboarded_at'] = user['onboarded_at'].isoformat() if user.get('onboarded_at') else None
     return user
 
@@ -437,6 +442,7 @@ def update_profile(
     currency: str | None = Body(None),
     distance_unit: str | None = Body(None),
     volume_unit: str | None = Body(None),
+    climate_zone: str | None = Body(None),
     onboarding_complete: bool | None = Body(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
@@ -498,6 +504,15 @@ def update_profile(
         updates.append('volume_unit = %s')
         values.append(volume_unit)
 
+    # Rejected rather than silently defaulted: an unrecognised zone stored here would
+    # read back as "answered" while forecasting on the fallback curve, which is exactly
+    # the confusion the nullable column exists to avoid.
+    if climate_zone is not None and column_exists(db, 'users', 'climate_zone'):
+        if climate_zone not in CLIMATE_ZONES:
+            raise HTTPException(status_code=400, detail=f'Unsupported climate zone: {climate_zone}')
+        updates.append('climate_zone = %s')
+        values.append(climate_zone)
+
     # Skipping sets this too. The flag means "we have asked", not "they answered".
     if onboarding_complete and column_exists(db, 'users', 'onboarded_at'):
         updates.append('onboarded_at = NOW()')
@@ -521,7 +536,7 @@ def update_profile(
             changed_fields.append('theme_mode')
         if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
             changed_fields.append('dismissed_alerts')
-        for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit)):
+        for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit), ('climate_zone', climate_zone)):
             if value is not None and column_exists(db, 'users', name):
                 changed_fields.append(name)
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})
@@ -541,4 +556,7 @@ def get_unit_options():
         'currencies': SUPPORTED_CURRENCIES,
         'distance_units': [{'value': k, **v} for k, v in DISTANCE_UNITS.items()],
         'volume_units': [{'value': k, **v} for k, v in VOLUME_UNITS.items()],
+        # Not a unit, but it belongs to the same settings screen and the same rule: the
+        # client should not carry its own copy of a list the backend computes from.
+        'climate_zones': zone_options(),
     }

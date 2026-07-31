@@ -1,7 +1,7 @@
 try:
-    from backend.db import get_vehicle_column, table_exists
+    from backend.db import column_exists, get_vehicle_column, table_exists
 except ModuleNotFoundError:
-    from db import get_vehicle_column, table_exists
+    from db import column_exists, get_vehicle_column, table_exists
 
 
 EXPENSE_EVENT_TYPES = {'maintenance', 'insurance', 'parking', 'toll', 'tax', 'inspection', 'cleaning'}
@@ -94,26 +94,34 @@ def backfill_vehicle_events(db):
 def sync_session_to_vehicle_event(db, session_id: int):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
+    # Location arrived after this table did, and the module has to keep working against
+    # a database at an earlier migration state — same reason get_vehicle_column exists.
+    has_location = column_exists(db, 'charging_sessions', 'latitude') and column_exists(db, 'vehicle_events', 'latitude')
+    location_select = (
+        ', cs.latitude, cs.longitude, p.name AS place_name' if has_location else ''
+    )
+    location_join = ' LEFT JOIN places p ON p.id = cs.place_id' if has_location else ''
     cur.execute(
         f"""
         SELECT
-            id,
-            user_id,
-            {vehicle_column} AS vehicle_id,
-            session_type,
-            start_time,
-            end_time,
-            cost_amount,
-            odometer,
-            source,
-            notes,
-            kwh,
-            battery_level_start,
-            battery_level_end,
-            fuel_liters,
-            created_at
-        FROM charging_sessions
-        WHERE id = %s
+            cs.id,
+            cs.user_id,
+            cs.{vehicle_column} AS vehicle_id,
+            cs.session_type,
+            cs.start_time,
+            cs.end_time,
+            cs.cost_amount,
+            cs.odometer,
+            cs.source,
+            cs.notes,
+            cs.kwh,
+            cs.battery_level_start,
+            cs.battery_level_end,
+            cs.fuel_liters,
+            cs.created_at
+            {location_select}
+        FROM charging_sessions cs{location_join}
+        WHERE cs.id = %s
         LIMIT 1;
         """,
         (session_id,),
@@ -122,14 +130,46 @@ def sync_session_to_vehicle_event(db, session_id: int):
     if not session:
         return
 
+    location_columns = ', latitude, longitude, place_name' if has_location else ''
+    location_values = ', %s, %s, %s' if has_location else ''
+    location_updates = (
+        """,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
+            place_name = EXCLUDED.place_name"""
+        if has_location else ''
+    )
+
+    values = [
+        session['user_id'],
+        session['vehicle_id'],
+        session['id'],
+        session['session_type'],
+        'Fueling' if session['session_type'] == 'fueling' else 'Charging',
+        session['start_time'],
+        session['end_time'],
+        session['cost_amount'],
+        session['odometer'],
+        session['source'],
+        session['notes'],
+        session['kwh'],
+        session['battery_level_start'],
+        session['battery_level_end'],
+        session['fuel_liters'],
+        session['created_at'],
+    ]
+    if has_location:
+        values.extend([session['latitude'], session['longitude'], session['place_name']])
+
     cur.execute(
-        """
+        f"""
         INSERT INTO vehicle_events (
             user_id, vehicle_id, legacy_source, legacy_id, event_type, title,
             occurred_at, ended_at, total_cost, currency, odometer_km, source, notes,
             energy_kwh, battery_level_start, battery_level_end, fuel_liters, created_at, updated_at
+            {location_columns}
         )
-        VALUES (%s, %s, 'charging_session', %s, %s, %s, %s, %s, %s, 'HUF', %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, 'charging_session', %s, %s, %s, %s, %s, %s, 'HUF', %s, %s, %s, %s, %s, %s, %s, %s, NOW(){location_values})
         ON CONFLICT (legacy_source, legacy_id)
         DO UPDATE SET
             vehicle_id = EXCLUDED.vehicle_id,
@@ -145,26 +185,9 @@ def sync_session_to_vehicle_event(db, session_id: int):
             battery_level_start = EXCLUDED.battery_level_start,
             battery_level_end = EXCLUDED.battery_level_end,
             fuel_liters = EXCLUDED.fuel_liters,
-            updated_at = NOW();
+            updated_at = NOW(){location_updates};
         """,
-        (
-            session['user_id'],
-            session['vehicle_id'],
-            session['id'],
-            session['session_type'],
-            'Fueling' if session['session_type'] == 'fueling' else 'Charging',
-            session['start_time'],
-            session['end_time'],
-            session['cost_amount'],
-            session['odometer'],
-            session['source'],
-            session['notes'],
-            session['kwh'],
-            session['battery_level_start'],
-            session['battery_level_end'],
-            session['fuel_liters'],
-            session['created_at'],
-        ),
+        tuple(values),
     )
 
 

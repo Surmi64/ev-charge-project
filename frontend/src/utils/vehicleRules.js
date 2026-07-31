@@ -44,3 +44,15 @@ export function getDefaultSessionType(fuelType) {
 export function requiresBatteryCapacity(fuelType) {
   return supportsCharging(fuelType);
 }
+/**
+ * Only battery cars are asked about a heat pump.
+ *
+ * A combustion engine heats the cabin with waste heat it makes anyway, so the question
+ * is meaningless for it. Hybrids are excluded too: the app does not distinguish a
+ * plug-in from a full hybrid, and for both the engine's waste heat dominates the
+ * winter penalty, so an answer would not move their forecast. Mirrors
+ * backend/vehicle_rules.py:supports_heat_pump.
+ */
+export function supportsHeatPump(fuelType) {
+  return isElectricVehicle(fuelType);
+}

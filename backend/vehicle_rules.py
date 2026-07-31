@@ -14,6 +14,17 @@ HYDROGEN_FUEL_TYPES = {'hydrogen'}
 HEX_COLOR_PATTERN = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
 
+def supports_heat_pump(fuel_type: str | None) -> bool:
+    """Only battery cars, where cabin heat has to come out of the pack.
+
+    A combustion engine heats the cabin with waste heat it makes anyway, so the
+    question is meaningless for it. Hybrids are excluded too: the app does not
+    distinguish a plug-in from a full hybrid, and for both the engine's waste heat
+    dominates the winter penalty, so an answer here would not move their forecast.
+    """
+    return fuel_type in ELECTRIC_FUEL_TYPES
+
+
 def supports_charging(fuel_type: str | None) -> bool:
     return fuel_type in ELECTRIC_FUEL_TYPES or fuel_type in HYBRID_FUEL_TYPES
 
@@ -51,6 +62,11 @@ def normalize_vehicle_payload(vehicle):
 
     if fuel_type in ELECTRIC_FUEL_TYPES:
         payload['tank_capacity_liters'] = None
+
+    # Cleared rather than left behind when a vehicle is switched to a fuel type the
+    # question does not apply to, so a stale TRUE cannot go on skewing the forecast.
+    if fuel_type is not None and not supports_heat_pump(fuel_type):
+        payload['has_heat_pump'] = None
 
     return payload
 

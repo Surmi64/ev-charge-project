@@ -40,6 +40,9 @@ CSV_COLUMNS = [
     'source',
     'battery_level_start',
     'battery_level_end',
+    'place_name',
+    'latitude',
+    'longitude',
 ]
 
 
@@ -214,13 +217,17 @@ def import_activity_row(row: dict, db, user_id: str) -> str:
 @router.get('/activity', response_model=list[dict])
 def get_activity(
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     activity_type: Optional[str] = Query(None),
     vehicle_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_tenant_db),
 ):
-    return get_activity_feed(db, user_id, limit=limit, activity_type=activity_type, vehicle_id=vehicle_id, search=search)
+    return get_activity_feed(
+        db, user_id, limit=limit, offset=offset,
+        activity_type=activity_type, vehicle_id=vehicle_id, search=search,
+    )
 
 
 @router.get('/activity/export.csv')
@@ -256,6 +263,9 @@ def export_activity_csv(
                 'source': row.get('source') or '',
                 'battery_level_start': row.get('battery_level_start') if row.get('battery_level_start') is not None else '',
                 'battery_level_end': row.get('battery_level_end') if row.get('battery_level_end') is not None else '',
+                'place_name': row.get('place_name') or '',
+                'latitude': float(row['latitude']) if row.get('latitude') is not None else '',
+                'longitude': float(row['longitude']) if row.get('longitude') is not None else '',
             }
         )
 

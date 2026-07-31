@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserRegister(BaseModel):
@@ -58,6 +58,8 @@ class VehicleCreate(BaseModel):
     battery_capacity_kwh: Optional[float] = None
     tank_capacity_liters: Optional[float] = None
     starting_odometer_km: Optional[float] = None
+    # None means unanswered, which the forecast treats differently from False.
+    has_heat_pump: Optional[bool] = None
     color_hex: Optional[str] = None
     notes: Optional[str] = None
     is_default: bool = False
@@ -73,6 +75,7 @@ class VehicleUpdate(BaseModel):
     battery_capacity_kwh: Optional[float] = None
     tank_capacity_liters: Optional[float] = None
     starting_odometer_km: Optional[float] = None
+    has_heat_pump: Optional[bool] = None
     color_hex: Optional[str] = None
     notes: Optional[str] = None
     is_default: Optional[bool] = None
@@ -138,3 +141,9 @@ class ChargingSessionCreate(BaseModel):
     battery_level_end: Optional[int] = None
     odometer: Optional[float] = None
     notes: Optional[str] = None
+    # Where it happened. All optional and independent: a fix with no name is still worth
+    # keeping, and a name typed with no fix still identifies a known place.
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    location_accuracy_m: Optional[float] = Field(None, ge=0)
+    place_name: Optional[str] = Field(None, max_length=120)

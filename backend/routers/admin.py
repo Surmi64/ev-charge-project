@@ -148,7 +148,15 @@ def list_users(admin_user=Depends(require_admin_user), db=Depends(get_db)):
             ORDER BY created_at ASC;
             '''
         )
-    return cur.fetchall()
+    rows = cur.fetchall()
+
+    # Marked here rather than re-derived in the client, which has no idea which address
+    # is configured as the bootstrap admin. Without it the UI offers a delete that the
+    # server always refuses.
+    bootstrap = BOOTSTRAP_ADMIN_EMAIL.lower() if BOOTSTRAP_ADMIN_EMAIL else None
+    for row in rows:
+        row['is_bootstrap_admin'] = bool(bootstrap and row['email'].lower() == bootstrap)
+    return rows
 
 
 @router.patch('/users/{target_user_id}/role')
@@ -188,6 +196,72 @@ def update_user_role(
     )
     db.commit()
     return {'message': 'User role updated successfully'}
+
+
+@router.delete('/users/{target_user_id}')
+def delete_user(
+    target_user_id: int,
+    request: Request,
+    admin_user=Depends(require_admin_user),
+    db=Depends(get_db),
+):
+    """Remove an account and everything it owns.
+
+    The cascade does the work: vehicles, sessions, expenses, vehicle_events, reminders,
+    subscriptions, sessions and reset tokens all carry ON DELETE CASCADE. Referential
+    actions run as the table owner and are not subject to row level security, so this
+    succeeds even though the admin connection can never *read* those rows -- an admin
+    can destroy an account's data without being able to look at it, which is the
+    intended shape of this system rather than a gap in it.
+
+    auth_audit_logs.user_id is ON DELETE SET NULL on purpose, so the trail of what
+    happened survives the account it happened to; the email stays on those rows.
+    """
+    ensure_user_roles(db)
+    cur = db.cursor()
+    cur.execute('SELECT id, username, email, role FROM users WHERE id = %s LIMIT 1;', (target_user_id,))
+    target_user = cur.fetchone()
+    if not target_user:
+        raise HTTPException(status_code=404, detail='Target user not found')
+
+    if target_user['id'] == admin_user['id']:
+        raise HTTPException(status_code=400, detail='You cannot delete your own account here')
+
+    if BOOTSTRAP_ADMIN_EMAIL and target_user['email'].lower() == BOOTSTRAP_ADMIN_EMAIL.lower():
+        raise HTTPException(status_code=400, detail='The bootstrap admin account cannot be deleted')
+
+    # Unreachable while self-deletion is refused above -- whoever is deleting is an
+    # admin themselves, so the count can never be below two here. Kept so the invariant
+    # survives if that guard is ever relaxed, rather than because it fires today.
+    if target_user['role'] == 'admin':
+        cur.execute("SELECT COUNT(*) AS count FROM users WHERE role = 'admin';")
+        if (cur.fetchone() or {}).get('count', 0) <= 1:
+            raise HTTPException(status_code=400, detail='This is the only admin account left')
+
+    # Logged before the delete, and against the acting admin rather than the target, so
+    # the record is not the one being nulled out by the cascade.
+    log_auth_event(
+        db,
+        'user_delete',
+        'success',
+        user_id=admin_user['id'],
+        email=admin_user['email'],
+        ip_address=get_client_ip(request),
+        details={
+            'target_user_id': target_user_id,
+            'target_email': target_user['email'],
+            'target_role': target_user['role'],
+        },
+    )
+
+    try:
+        cur.execute('DELETE FROM users WHERE id = %s;', (target_user_id,))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {'message': f"Deleted {target_user['email']} and all of its records"}
 
 
 @router.post('/users/{target_user_id}/reset-password-token')

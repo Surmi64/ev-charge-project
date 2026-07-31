@@ -225,6 +225,20 @@ function App() {
               color: darkMode ? '#061015' : '#F7FBFC',
               boxShadow: darkMode ? `0 0 12px ${alpha(primaryMain, 0.22)}` : `0 10px 20px ${alpha(primaryMain, 0.18)}`,
             },
+            // `contained` paints every filled button with the brand gradient regardless
+            // of colour, which left destructive confirmations looking exactly like an
+            // ordinary primary action -- delete a vehicle, delete a record, delete an
+            // account. Measured with the same ink the gradient uses: #061015 on #f44336
+            // is 5.2:1, #F7FBFC on #d32f2f is 5.0:1.
+            containedError: ({ theme: muiTheme }) => ({
+              backgroundImage: 'none',
+              backgroundColor: muiTheme.palette.error.main,
+              color: darkMode ? '#061015' : '#F7FBFC',
+              boxShadow: darkMode
+                ? `0 0 12px ${alpha(muiTheme.palette.error.main, 0.3)}`
+                : `0 10px 20px ${alpha(muiTheme.palette.error.main, 0.22)}`,
+              '&:hover': { backgroundColor: muiTheme.palette.error.dark },
+            }),
             outlined: {
               borderColor: darkMode ? alpha(primaryMain, 0.45) : alpha(primaryMain, 0.24),
               backgroundColor: darkMode ? 'transparent' : alpha('#FFFFFF', 0.48),

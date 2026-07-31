@@ -17,9 +17,18 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
+  IconButton,
+  TextField,
+  Tooltip,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
+import {
+  DeleteForeverOutlined as DeleteIcon,
+  LockResetOutlined as ResetTokenIcon,
+  LogoutOutlined as ForceLogoutIcon,
+} from '@mui/icons-material';
 import { toast } from 'sonner';
 import { useAuth } from '../context/useAuth';
 import { TableSectionSkeleton } from './SectionSkeletons';
@@ -84,6 +93,31 @@ function UserManagement({ embedded = false }) {
       toast.error(error.message);
     } finally {
       setSavingUserId(null);
+    }
+  };
+
+  // Typed confirmation rather than a plain "are you sure": this destroys another
+  // account's entire history, it cannot be undone, and there is no soft-delete to fall
+  // back on the way archiving covers vehicles.
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteUser = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const res = await apiFetch(`/api/admin/users/${pendingDelete.id}`, { method: 'DELETE' });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.detail || 'Could not delete that user');
+      toast.success(payload.message || 'User deleted');
+      setPendingDelete(null);
+      setDeleteConfirmation('');
+      fetchUsers();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -181,24 +215,63 @@ function UserManagement({ embedded = false }) {
                   <TableCell>{entry.created_at ? new Date(entry.created_at).toLocaleDateString() : '-'}</TableCell>
                   <TableCell>{entry.last_login_at ? new Date(entry.last_login_at).toLocaleString() : 'Never'}</TableCell>
                   <TableCell align="right">
-                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        disabled={savingUserId === entry.id}
-                        onClick={() => handleCreateResetToken(entry)}
+                    {/* Icon-only, so the column stays narrow. Each carries its own
+                        aria-label rather than relying on the tooltip, which a screen
+                        reader does not announce. The span wrappers are what let a
+                        tooltip still appear on a disabled button.
+
+                        `size="small"` alone gives a 30px target, under every platform
+                        minimum, on the one row where a mis-tap deletes an account. The
+                        padding grows the hit area to 40px without changing how big the
+                        icons look. */}
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
+                      <Tooltip title="Create a password reset token">
+                        <span>
+                          <IconButton
+                            size="small"
+                            sx={{ p: 1.25 }}
+                            aria-label={`Create a password reset token for ${entry.email}`}
+                            disabled={savingUserId === entry.id}
+                            onClick={() => handleCreateResetToken(entry)}
+                          >
+                            <ResetTokenIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="Sign this account out everywhere">
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="warning"
+                            sx={{ p: 1.25 }}
+                            aria-label={`Sign ${entry.email} out of every device`}
+                            disabled={savingUserId === entry.id}
+                            onClick={() => handleRevokeSessions(entry)}
+                          >
+                            <ForceLogoutIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Tooltip
+                        title={
+                          entry.id === user?.id ? 'You cannot delete your own account'
+                            : entry.is_bootstrap_admin ? 'The bootstrap admin account cannot be deleted'
+                            : 'Delete this account and all its records'
+                        }
                       >
-                        Create Reset Token
-                      </Button>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="error"
-                        disabled={savingUserId === entry.id}
-                        onClick={() => handleRevokeSessions(entry)}
-                      >
-                        Force Logout
-                      </Button>
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            sx={{ p: 1.25 }}
+                            aria-label={`Delete ${entry.email} and all of its records`}
+                            disabled={savingUserId === entry.id || entry.id === user?.id || entry.is_bootstrap_admin}
+                            onClick={() => { setPendingDelete(entry); setDeleteConfirmation(''); }}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -207,6 +280,51 @@ function UserManagement({ embedded = false }) {
           </Table>
         </TableContainer>
       </Paper>
+
+      <Dialog
+        open={!!pendingDelete}
+        onClose={() => { if (!deleting) { setPendingDelete(null); setDeleteConfirmation(''); } }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Delete {pendingDelete?.email}?</DialogTitle>
+        <DialogContent>
+          <DialogContentText component="div">
+            <Typography variant="body2" sx={{ mb: 1.5 }}>
+              This permanently removes the account together with every vehicle, charging
+              and fuelling session, cost, reminder and subscription record it owns. There
+              is no undo and no archive to restore from.
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              The security log keeps a record that this happened.
+            </Typography>
+          </DialogContentText>
+          <TextField
+            fullWidth
+            autoFocus
+            label="Type the email address to confirm"
+            value={deleteConfirmation}
+            onChange={(event) => setDeleteConfirmation(event.target.value)}
+            placeholder={pendingDelete?.email}
+            disabled={deleting}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setPendingDelete(null); setDeleteConfirmation(''); }} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={handleDeleteUser}
+            // Case-insensitive: retyping an address is a deliberateness check, not a
+            // spelling test.
+            disabled={deleting || deleteConfirmation.trim().toLowerCase() !== (pendingDelete?.email || '').toLowerCase()}
+          >
+            {deleting ? 'Deleting…' : 'Delete account'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={resetDialogOpen} onClose={() => setResetDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Development Reset Token</DialogTitle>

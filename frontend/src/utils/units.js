@@ -112,14 +112,23 @@ const REGION_CURRENCY = {
 const MILE_REGIONS = new Set(['US', 'GB']);
 const GALLON_REGIONS = new Set(['US']);
 
-export function guessPreferencesFromLocale(locale) {
+/**
+ * The ISO region behind a locale tag, e.g. 'HU' for 'hu' or 'hu-HU'.
+ *
+ * Exported because the climate-zone guess needs the same answer, and deriving it twice
+ * would mean two subtly different fallbacks the first time `Intl.Locale` is missing.
+ */
+export function regionFromLocale(locale) {
   const tag = locale || (typeof navigator !== 'undefined' ? navigator.language : '') || 'en-US';
-  let region = '';
   try {
-    region = new Intl.Locale(tag).maximize().region || '';
+    return new Intl.Locale(tag).maximize().region || '';
   } catch {
-    region = (tag.split('-')[1] || '').toUpperCase();
+    return (tag.split('-')[1] || '').toUpperCase();
   }
+}
+
+export function guessPreferencesFromLocale(locale) {
+  const region = regionFromLocale(locale);
 
   return {
     currency: REGION_CURRENCY[region] || 'EUR',

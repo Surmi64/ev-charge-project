@@ -10,6 +10,7 @@ def get_activity_feed(
     db,
     user_id: str,
     limit: int = 50,
+    offset: int = 0,
     activity_type: Optional[str] = None,
     vehicle_id: Optional[int] = None,
     search: Optional[str] = None,
@@ -50,7 +51,14 @@ def get_activity_feed(
         )
 
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
+    # Location arrived late; tolerate a database that predates it, like the other
+    # column_exists checks in this file.
+    location_select = (
+        ', ve.latitude, ve.longitude, ve.place_name::text AS place_name'
+        if column_exists(db, 'vehicle_events', 'place_name') else ''
+    )
     params.append(limit)
+    params.append(offset)
 
     cur.execute(
         f"""
@@ -58,6 +66,11 @@ def get_activity_feed(
         FROM (
             SELECT
                 ve.id::text AS event_id,
+                -- Numeric copy purely to break ties in the sort. Two records can share
+                -- an occurred_at, and ordering by that alone makes paging unstable:
+                -- the same row can come back on two pages, or be skipped between them.
+                -- Not returned to the client, which is built from named fields below.
+                ve.id AS sort_id,
                 COALESCE(ve.legacy_id, ve.id)::text AS id,
                 ve.legacy_source::text AS legacy_source,
                 CASE WHEN ve.event_type IN ('charging', 'fueling') THEN 'session' ELSE 'expense' END::text AS activity_type,
@@ -68,13 +81,14 @@ def get_activity_feed(
                 COALESCE(v.name, CONCAT(v.make, ' ', v.model), 'All vehicles')::text AS vehicle_name,
                 COALESCE(ve.title, INITCAP(REPLACE(COALESCE(ve.expense_category, ve.event_type), '_', ' ')))::text AS title,
                 ve.notes::text AS description
+                {location_select}
             FROM vehicle_events ve
             LEFT JOIN vehicles v ON v.id = ve.vehicle_id AND v.user_id = ve.user_id
             WHERE ve.user_id = %s
         ) combined_activity
         {where_clause}
-        ORDER BY occurred_at DESC
-        LIMIT %s;
+        ORDER BY occurred_at DESC, sort_id DESC
+        LIMIT %s OFFSET %s;
         """,
         tuple(params),
     )
@@ -97,6 +111,11 @@ def get_activity_feed(
             'vehicle_name': row['vehicle_name'],
             'title': row['title'],
             'description': row.get('description'),
+            # Present only once the record has one; the UI shows nothing rather than an
+            # empty pin for the many records that will never have a location.
+            'place_name': row.get('place_name'),
+            'latitude': float(row['latitude']) if row.get('latitude') is not None else None,
+            'longitude': float(row['longitude']) if row.get('longitude') is not None else None,
         }
         for row in cur.fetchall()
     ]
@@ -130,6 +149,10 @@ def get_activity_export_rows(
         params.extend([search_value, search_value, search_value])
 
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
+    export_location_select = (
+        ', ve.place_name::text AS place_name, ve.latitude, ve.longitude'
+        if column_exists(db, 'vehicle_events', 'place_name') else ''
+    )
 
     cur.execute(
         f"""
@@ -159,6 +182,7 @@ def get_activity_export_rows(
                 ve.source::text AS source,
                 ve.battery_level_start,
                 ve.battery_level_end
+                {export_location_select}
             FROM vehicle_events ve
             LEFT JOIN vehicles v ON v.id = ve.vehicle_id AND v.user_id = ve.user_id
             WHERE ve.user_id = %s

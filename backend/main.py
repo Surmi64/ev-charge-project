@@ -17,6 +17,7 @@ try:
     from backend.routers.expenses import router as expenses_router
     from backend.routers.health import router as health_router
     from backend.routers.insights import router as insights_router
+    from backend.routers.places import router as places_router
     from backend.routers.sessions import router as sessions_router
     from backend.routers.vehicles import router as vehicles_router
 except ModuleNotFoundError:
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
     from routers.expenses import router as expenses_router
     from routers.health import router as health_router
     from routers.insights import router as insights_router
+    from routers.places import router as places_router
     from routers.sessions import router as sessions_router
     from routers.vehicles import router as vehicles_router
 
@@ -130,4 +132,5 @@ app.include_router(vehicles_router)
 app.include_router(expenses_router)
 app.include_router(activity_router)
 app.include_router(sessions_router)
+app.include_router(places_router)
 app.include_router(insights_router)

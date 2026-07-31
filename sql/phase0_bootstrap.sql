@@ -17,10 +17,16 @@ CREATE TABLE IF NOT EXISTS users (
     volume_unit VARCHAR(8) NOT NULL DEFAULT 'l' CHECK (volume_unit IN ('l', 'gal_us', 'gal_uk')),
     -- NULL until the account has been through (or skipped) onboarding.
     onboarded_at TIMESTAMPTZ,
+    -- Which climate the fleet is driven in. Feeds the seasonal curves the cost forecast
+    -- is built from; NULL means unanswered, which resolves to a temperate default but
+    -- lets the UI offer to correct it. No CHECK: the zone list lives in
+    -- backend/climate.py and grows. (Alembic 20260731_000016)
+    climate_zone VARCHAR(32),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS climate_zone VARCHAR(32);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 
@@ -95,6 +101,10 @@ CREATE TABLE IF NOT EXISTS vehicles (
     notes TEXT,
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
     is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Nullable so it can also mean "not answered": a heat pump roughly halves a
+    -- battery car's cabin-heating penalty, and defaulting everyone to FALSE would
+    -- skew their winter forecast. (Alembic 20260730_000015)
+    has_heat_pump BOOLEAN,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT vehicles_year_chk CHECK (year IS NULL OR year BETWEEN 1950 AND 2100)
 );
@@ -102,6 +112,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS tank_capacity_liters NUMERIC(10,2);
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS starting_odometer_km NUMERIC(10,1);
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS color_hex VARCHAR(7);
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS has_heat_pump BOOLEAN;
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE;
 
@@ -190,6 +201,36 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     CONSTRAINT charging_sessions_odometer_chk CHECK (odometer IS NULL OR odometer >= 0)
 );
 
+-- ---------------------------------------------------------------------------
+-- Places (Alembic 20260731_000017)
+--
+-- A named spot the account keeps returning to. Separate from the coordinates on
+-- charging_sessions, which record where the phone said it was on one particular
+-- visit: naming a petrol station once has to be enough for every later visit.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS places (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(120) NOT NULL,
+    latitude NUMERIC(9,6) NOT NULL,
+    longitude NUMERIC(9,6) NOT NULL,
+    visit_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT places_latitude_chk CHECK (latitude BETWEEN -90 AND 90),
+    CONSTRAINT places_longitude_chk CHECK (longitude BETWEEN -180 AND 180)
+);
+
+CREATE INDEX IF NOT EXISTS places_user_coords_idx ON places (user_id, latitude, longitude);
+CREATE UNIQUE INDEX IF NOT EXISTS places_user_name_uidx ON places (user_id, LOWER(name));
+
+ALTER TABLE charging_sessions ADD COLUMN IF NOT EXISTS latitude NUMERIC(9,6);
+ALTER TABLE charging_sessions ADD COLUMN IF NOT EXISTS longitude NUMERIC(9,6);
+ALTER TABLE charging_sessions ADD COLUMN IF NOT EXISTS location_accuracy_m NUMERIC(8,1);
+ALTER TABLE charging_sessions ADD COLUMN IF NOT EXISTS place_id BIGINT REFERENCES places(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS charging_sessions_place_idx ON charging_sessions (place_id) WHERE place_id IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS charging_sessions_user_id_start_time_idx ON charging_sessions (user_id, start_time DESC);
 CREATE INDEX IF NOT EXISTS charging_sessions_vehicle_id_start_time_idx ON charging_sessions (vehicle_id, start_time DESC);
 CREATE INDEX IF NOT EXISTS charging_sessions_user_vehicle_type_start_idx ON charging_sessions (user_id, vehicle_id, session_type, start_time DESC);
@@ -214,6 +255,10 @@ CREATE TABLE IF NOT EXISTS vehicle_events (
     battery_level_start SMALLINT,
     battery_level_end SMALLINT,
     fuel_liters NUMERIC(10,2),
+    -- Denormalised from places, so Records renders a row without a join.
+    latitude NUMERIC(9,6),
+    longitude NUMERIC(9,6),
+    place_name VARCHAR(120),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT vehicle_events_unique_legacy_uidx UNIQUE (legacy_source, legacy_id)
@@ -296,7 +341,8 @@ DECLARE
 BEGIN
     -- User content: reachable only by its owner. No admin escape on purpose.
     FOREACH tenant_table IN ARRAY ARRAY['vehicles', 'charging_sessions', 'expenses',
-                                        'vehicle_events', 'recurring_expense_reminders']
+                                        'vehicle_events', 'recurring_expense_reminders',
+                                        'places']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tenant_table);
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', tenant_table);
@@ -336,7 +382,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260730_000014'
+SELECT '20260731_000017'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

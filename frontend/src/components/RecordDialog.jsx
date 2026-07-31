@@ -25,6 +25,7 @@ import { getAllowedSessionTypes } from '../utils/vehicleRules';
 import { EXPENSE_CATEGORIES } from '../utils/expenseCategories';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
+import LocationField from './LocationField';
 
 const RECORD_TYPES = [
   { value: 'charging', label: 'Charging', icon: <ChargingIcon fontSize="small" /> },
@@ -55,6 +56,11 @@ const emptyForm = () => ({
   currency: '',
   date: today(),
   notes: '',
+  // Optional throughout: a record with no location is exactly as valid as one with.
+  latitude: null,
+  longitude: null,
+  location_accuracy_m: null,
+  place_name: '',
 });
 
 /**
@@ -149,6 +155,10 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
           battery_level_end: num(form.battery_level_end),
           odometer: num(form.odometer),
           notes: form.notes || null,
+          latitude: form.latitude,
+          longitude: form.longitude,
+          location_accuracy_m: form.location_accuracy_m,
+          place_name: form.place_name ? form.place_name.trim() : null,
         }
       : {
           vehicle_id: form.vehicle_id === '' ? null : Number(form.vehicle_id),
@@ -277,6 +287,12 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                   <TextField label="Source" fullWidth
                     value={form.source} onChange={set('source')} helperText="Home, Ionity, MOL…" />
                 </Stack>
+
+                <LocationField
+                  value={form}
+                  disabled={submitting}
+                  onChange={(next) => setForm((prev) => ({ ...prev, ...next }))}
+                />
 
                 {form.type === 'charging' ? (
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>

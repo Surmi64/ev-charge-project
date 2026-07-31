@@ -20,6 +20,10 @@ def has_archive_support(db) -> bool:
     return column_exists(db, 'vehicles', 'is_archived')
 
 
+def has_heat_pump_support(db) -> bool:
+    return column_exists(db, 'vehicles', 'has_heat_pump')
+
+
 def get_active_vehicle_predicate(db, table_alias: str | None = None) -> str:
     if not has_archive_support(db):
         return 'TRUE'
@@ -83,6 +87,7 @@ def get_vehicles(
 @router.post('/vehicles', status_code=201)
 def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
+    heat_pump_supported = has_heat_pump_support(db)
     try:
         payload = normalize_vehicle_payload(vehicle)
 
@@ -93,12 +98,13 @@ def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_us
             )
 
         cur.execute(
-            """INSERT INTO vehicles (
+            f"""INSERT INTO vehicles (
                    user_id, name, make, model, fuel_type, year, license_plate,
                    battery_capacity_kwh, tank_capacity_liters, starting_odometer_km,
-                   color_hex, notes, is_default
+                   color_hex, notes, is_default{', has_heat_pump' if heat_pump_supported else ''}
                )
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{', %s' if heat_pump_supported else ''})
+               RETURNING id;""",
             (
                 user_id,
                 payload.get('name'),
@@ -113,6 +119,7 @@ def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_us
                 payload.get('color_hex'),
                 payload.get('notes'),
                 payload.get('is_default', False),
+                *([payload.get('has_heat_pump')] if heat_pump_supported else []),
             ),
         )
         vehicle_id = cur.fetchone()['id']
@@ -138,6 +145,11 @@ def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depen
     updates = []
     values = []
     normalized_payload = normalize_vehicle_payload(vehicle)
+
+    # The SET clause is built from whatever keys survive normalisation, so a column
+    # this database does not have yet must be dropped before it reaches the query.
+    if not has_heat_pump_support(db):
+        normalized_payload.pop('has_heat_pump', None)
 
     if has_archive_support(db) and normalized_payload.get('is_archived') is True:
         normalized_payload['is_default'] = False

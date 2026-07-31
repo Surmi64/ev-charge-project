@@ -16,7 +16,7 @@ import {
   Notes as NotesIcon
 } from '@mui/icons-material';
 import { toast } from 'sonner';
-import { requiresBatteryCapacity } from '../utils/vehicleRules';
+import { requiresBatteryCapacity, supportsHeatPump } from '../utils/vehicleRules';
 import { getFuelBoxSx, getFuelChipSx } from '../utils/fuelVisuals';
 import { TableSectionSkeleton } from './SectionSkeletons';
 import { useAuth } from '../context/useAuth';
@@ -107,7 +107,8 @@ const Vehicles = () => {
   const [formData, setFormData] = useState({
     name: '', make: '', model: '', fuel_type: 'electric',
     year: '', license_plate: '', battery_capacity_kwh: '', tank_capacity_liters: '',
-    starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false
+    starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false,
+    has_heat_pump: false
   });
 
   const fetchVehicles = async () => {
@@ -147,14 +148,18 @@ const Vehicles = () => {
         starting_odometer_km: vehicle.starting_odometer_km || '',
         color_hex: vehicle.color_hex || '#00F5FF',
         notes: vehicle.notes || '',
-        is_default: !!vehicle.is_default
+        is_default: !!vehicle.is_default,
+        // A vehicle that predates the question stores null; the box shows unchecked,
+        // and saving the form is what turns "unknown" into an explicit answer.
+        has_heat_pump: vehicle.has_heat_pump === true
       });
     } else {
       setEditingVehicle(null);
       setFormData({
         name: '', make: '', model: '', fuel_type: 'electric',
         year: '', license_plate: '', battery_capacity_kwh: '', tank_capacity_liters: '',
-        starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false
+        starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false,
+        has_heat_pump: false
       });
     }
     setOpen(true);
@@ -184,6 +189,9 @@ const Vehicles = () => {
             ? parseFloat(formData.tank_capacity_liters)
             : null,
           starting_odometer_km: formData.starting_odometer_km ? parseFloat(formData.starting_odometer_km) : null,
+          // Sent as null rather than false where the question does not apply, so the
+          // forecast can tell "no heat pump" from "not a battery car".
+          has_heat_pump: supportsHeatPump(formData.fuel_type) ? !!formData.has_heat_pump : null,
           color_hex: formData.color_hex || null,
           notes: formData.notes.trim() || null
         })
@@ -429,7 +437,7 @@ const Vehicles = () => {
               <TextField label="Model" required fullWidth value={formData.model} onChange={e => setFormData({...formData, model: e.target.value})} error={submitAttempted && !!formErrors.model} helperText={submitAttempted ? formErrors.model || 'Required' : 'Required'} />
             </Box>
             <Box display="flex" gap={2}>
-              <TextField select label="Fuel Type" fullWidth value={formData.fuel_type} onChange={e => setFormData({...formData, fuel_type: e.target.value, battery_capacity_kwh: requiresBatteryCapacity(e.target.value) ? formData.battery_capacity_kwh : '', tank_capacity_liters: supportsFueling(e.target.value) ? formData.tank_capacity_liters : ''})}>
+              <TextField select label="Fuel Type" fullWidth value={formData.fuel_type} onChange={e => setFormData({...formData, fuel_type: e.target.value, battery_capacity_kwh: requiresBatteryCapacity(e.target.value) ? formData.battery_capacity_kwh : '', tank_capacity_liters: supportsFueling(e.target.value) ? formData.tank_capacity_liters : '', has_heat_pump: supportsHeatPump(e.target.value) ? formData.has_heat_pump : false})}>
                 {FUEL_TYPES.map(f => <MenuItem key={f.value} value={f.value}>{f.label}</MenuItem>)}
               </TextField>
               <TextField label="Year" type="number" fullWidth value={formData.year} onChange={e => setFormData({...formData, year: e.target.value})} error={submitAttempted && !!formErrors.year} helperText={submitAttempted ? formErrors.year || 'Optional' : 'Optional'} />
@@ -457,6 +465,28 @@ const Vehicles = () => {
                     <TextField label={`Tank Capacity (${tankUnit(formData.fuel_type)})`} type="number" fullWidth value={formData.tank_capacity_liters} onChange={e => setFormData({...formData, tank_capacity_liters: e.target.value})} error={submitAttempted && !!formErrors.tank_capacity_liters} helperText={submitAttempted ? formErrors.tank_capacity_liters || 'Optional for hybrids and fuel vehicles.' : 'Optional for hybrids and fuel vehicles.'} />
                   ) : null}
                 </Box>
+                {supportsHeatPump(formData.fuel_type) ? (
+                  <FormControlLabel
+                    sx={{ mt: 1, alignItems: 'flex-start', ml: 0, gap: 1.25 }}
+                    control={
+                      <Checkbox
+                        checked={!!formData.has_heat_pump}
+                        onChange={e => setFormData({ ...formData, has_heat_pump: e.target.checked })}
+                        sx={{ pt: 0.25 }}
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="body2" fontWeight={600}>Has a heat pump</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Used by the cost forecast. A heat pump roughly halves the energy a
+                          battery car spends heating the cabin, which is most of why winter
+                          costs more.
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                ) : null}
               </Box>
             ) : null}
             <Box display="flex" gap={2}>
