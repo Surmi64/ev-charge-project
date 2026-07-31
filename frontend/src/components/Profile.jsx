@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Paper, Typography, TextField, Button, Divider, CircularProgress, Chip, Stack, useTheme } from '@mui/material';
+import { Box, Paper, Typography, TextField, Button, Divider, CircularProgress, Chip, Stack, List, ListItem, ListItemButton, ListItemIcon, ListItemText, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
@@ -7,10 +7,15 @@ import ClimateSettings from './ClimateSettings';
 import { toast } from 'sonner';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { useNavigate } from 'react-router-dom';
+import { getSettingsItems } from '../utils/settingsNav';
 import { apiFetch } from '../utils/api';
 
 const Profile = () => {
     const { token, user, updateUser, loading: authLoading } = useAuth();
+    const navigate = useNavigate();
+    const settingsItems = getSettingsItems(user);
     const theme = useTheme();
     const [loading, setLoading] = useState(false);
     const [securityLoading, setSecurityLoading] = useState(true);
@@ -127,6 +132,37 @@ const Profile = () => {
             </Typography>
 
             <Stack spacing={3} sx={{ maxWidth: 760, mx: 'auto' }}>
+                {/* Mobile only. On desktop these sit in the sidebar, and repeating them
+                    here would give one screen two ways to reach the same page; below
+                    `sm` the sidebar is hidden and this is the only way in. */}
+                {settingsItems.length ? (
+                    <Paper sx={{ display: { xs: 'block', sm: 'none' }, p: 1, borderRadius: 4, bgcolor: 'background.paper' }}>
+                        <List disablePadding>
+                            {settingsItems.map((item) => (
+                                <ListItem key={item.path} disablePadding>
+                                    <ListItemButton
+                                        onClick={() => navigate(item.path)}
+                                        sx={{ borderRadius: 2, py: 1.5 }}
+                                    >
+                                        <ListItemIcon sx={{ color: item.danger ? 'error.main' : 'primary.main', minWidth: 44 }}>
+                                            {item.icon}
+                                        </ListItemIcon>
+                                        <ListItemText
+                                            primary={item.text}
+                                            secondary={item.description}
+                                            slotProps={{
+                                                primary: { fontWeight: 600, color: item.danger ? 'error.main' : 'text.primary' },
+                                                secondary: { variant: 'caption' },
+                                            }}
+                                        />
+                                        <ChevronRightIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                                    </ListItemButton>
+                                </ListItem>
+                            ))}
+                        </List>
+                    </Paper>
+                ) : null}
+
                 <Paper sx={{ p: 3, borderRadius: 4, boxShadow: `0 0 24px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
                         <PersonIcon color="primary" sx={{ mr: 1 }} />

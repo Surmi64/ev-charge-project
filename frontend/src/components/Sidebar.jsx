@@ -17,8 +17,6 @@ import {
   Timeline as ActivityIcon,
   BarChart as AnalyticsIcon,
   Person as PersonIcon,
-  CreditCard as BillingIcon,
-  AdminPanelSettings as AdminIcon,
   Logout as LogoutIcon,
   Brightness4 as DarkIcon,
   Brightness7 as LightIcon
@@ -26,6 +24,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 import OdometerWordmark from './OdometerWordmark';
+import { getSettingsItems } from '../utils/settingsNav';
 
 const Sidebar = ({ toggleTheme, themeMode }) => {
   const navigate = useNavigate();
@@ -42,15 +41,9 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
     { text: 'Account', icon: <PersonIcon />, path: '/account' },
   ];
 
-  const settingsItems = [
-    { text: 'Subscription', icon: <BillingIcon />, path: '/billing' },
-  ];
-
-  if (user?.role === 'admin') {
-    // Flagged red and sitting apart from the ordinary settings: it reaches every
-    // account on the instance, not just this one.
-    settingsItems.push({ text: 'Admin', icon: <AdminIcon />, path: '/admin', danger: true });
-  }
+  // Shared with the Account page, which is where a phone reaches these — the sidebar
+  // is hidden below `sm`.
+  const settingsItems = getSettingsItems(user);
 
   const isMenuItemSelected = (path) => location.pathname === path;
 
