@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -13,11 +14,14 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import {
   EvStation as ChargingIcon,
   LocalGasStation as FuelingIcon,
   ReceiptLong as CostIcon,
+  ExpandMore as ExpandIcon,
 } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
@@ -77,6 +81,11 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  // The fields most records leave empty, folded away by default. Everything needed to
+  // file a charge — when, how much, what it cost, where — stays in the open.
+  const [showExtras, setShowExtras] = useState(false);
+  const theme = useTheme();
+  const compact = useMediaQuery(theme.breakpoints.down('sm'));
 
   const isEdit = Boolean(editing);
   const isSession = form.type === 'charging' || form.type === 'fueling';
@@ -105,6 +114,11 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
       setForm({ ...emptyForm(), vehicle_id: preferred ? String(preferred.id) : '' });
     }
     setAttempted(false);
+    // Reopened for an edit, the extras may already hold values; hiding them would make
+    // a filled-in field invisible, which is worse than a longer form.
+    setShowExtras(Boolean(
+      editing && (editing.end_time || editing.battery_level_start || editing.battery_level_end || editing.notes),
+    ));
   }, [open, editing, activeVehicles]);
 
   // A petrol car cannot be charged; if the picked vehicle rules out the current
@@ -193,11 +207,11 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
   const bad = (field) => attempted && Boolean(errors[field]);
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={compact}>
       <form onSubmit={handleSubmit}>
         <DialogTitle>{isEdit ? 'Edit record' : 'Add record'}</DialogTitle>
         <DialogContent>
-          <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <Stack spacing={{ xs: 1.75, sm: 2.5 }} sx={{ pt: 1 }}>
             <Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 What are you logging?
@@ -245,22 +259,17 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
 
             {isSession ? (
               <>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <TextField
-                    label="Start" type="datetime-local" fullWidth
-                    value={form.start_time} onChange={set('start_time')}
-                    error={bad('start_time')} helperText={helper('start_time', ' ')}
-                    slotProps={{ inputLabel: { shrink: true } }}
-                  />
-                  <TextField
-                    label="End" type="datetime-local" fullWidth
-                    value={form.end_time} onChange={set('end_time')}
-                    helperText="Optional"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                  />
-                </Stack>
+                <TextField
+                  label="Start" type="datetime-local" fullWidth
+                  value={form.start_time} onChange={set('start_time')}
+                  error={bad('start_time')} helperText={helper('start_time', ' ')}
+                  slotProps={{ inputLabel: { shrink: true } }}
+                />
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                {/* Short numeric fields pair up even on a phone. Each half is ~180px,
+                    comfortably past the 44px touch minimum in both directions, and the
+                    label still fits. */}
+                <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   {form.type === 'charging' ? (
                     <TextField
                       label="Energy (kWh)" type="number" fullWidth
@@ -281,7 +290,7 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                   />
                 </Stack>
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   <TextField label={`Odometer (${fmt.distanceShort})`} type="number" fullWidth
                     value={form.odometer} onChange={set('odometer')} helperText="Optional" />
                   <TextField label="Source" fullWidth
@@ -294,18 +303,10 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                   onChange={(next) => setForm((prev) => ({ ...prev, ...next }))}
                 />
 
-                {form.type === 'charging' ? (
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                    <TextField label="Battery start (%)" type="number" fullWidth
-                      value={form.battery_level_start} onChange={set('battery_level_start')} helperText="Optional" />
-                    <TextField label="Battery end (%)" type="number" fullWidth
-                      value={form.battery_level_end} onChange={set('battery_level_end')} helperText="Optional" />
-                  </Stack>
-                ) : null}
               </>
             ) : (
               <>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   <TextField select label="Category" fullWidth value={form.category} onChange={set('category')}>
                     {EXPENSE_CATEGORIES.map((c) => (
                       <MenuItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</MenuItem>
@@ -318,7 +319,7 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                     slotProps={{ inputLabel: { shrink: true } }}
                   />
                 </Stack>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   <TextField
                     label="Amount" type="number" fullWidth
                     value={form.cost} onChange={set('cost')}
@@ -329,8 +330,39 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
               </>
             )}
 
-            <TextField label="Notes" fullWidth multiline minRows={2}
-              value={form.notes} onChange={set('notes')} helperText="Optional" />
+            <Box>
+              <Button
+                size="small"
+                onClick={() => setShowExtras((previous) => !previous)}
+                endIcon={<ExpandIcon sx={{ transform: showExtras ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }} />}
+                aria-expanded={showExtras}
+                sx={{ color: 'text.secondary', px: 0.5 }}
+              >
+                {showExtras ? 'Fewer details' : 'More details'}
+              </Button>
+              <Collapse in={showExtras} unmountOnExit={false}>
+                <Stack spacing={{ xs: 1.75, sm: 2.5 }} sx={{ pt: 1.5 }}>
+                  {isSession ? (
+                    <TextField
+                      label="End" type="datetime-local" fullWidth
+                      value={form.end_time} onChange={set('end_time')}
+                      helperText="Optional"
+                      slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                  ) : null}
+                  {isSession && form.type === 'charging' ? (
+                    <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
+                      <TextField label="Battery start (%)" type="number" fullWidth
+                        value={form.battery_level_start} onChange={set('battery_level_start')} helperText="Optional" />
+                      <TextField label="Battery end (%)" type="number" fullWidth
+                        value={form.battery_level_end} onChange={set('battery_level_end')} helperText="Optional" />
+                    </Stack>
+                  ) : null}
+                  <TextField label="Notes" fullWidth multiline minRows={2}
+                    value={form.notes} onChange={set('notes')} helperText="Optional" />
+                </Stack>
+              </Collapse>
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
