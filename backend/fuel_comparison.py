@@ -36,8 +36,14 @@ def observed_fuel_price(cur, user_id: str, start_date=None, end_date=None):
 
     Averaged over spend rather than over the individual prices: a 45-litre fill and a
     5-litre top-up should not count equally toward what fuel costs this account.
+
     Hydrogen is excluded — it is sold by the kilogram and lands in the same column, so
     including it would drag the average by a factor of four.
+
+    Archived vehicles are excluded too, because every other figure on that chart
+    already excludes them. Without this, a retired demo car's single fill-up set the
+    price for a whole fleet's comparison while contributing no distance to the bars it
+    was being compared against.
     """
     filters = [
         've.user_id = %s',
@@ -45,6 +51,7 @@ def observed_fuel_price(cur, user_id: str, start_date=None, end_date=None):
         've.fuel_liters > 0',
         've.total_cost > 0',
         "COALESCE(v.fuel_type, '') <> 'hydrogen'",
+        'COALESCE(v.is_archived, FALSE) = FALSE',
     ]
     params: list[object] = [user_id]
 
