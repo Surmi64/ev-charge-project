@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- authoritative as a real one. (Alembic 20260731_000018)
     reference_consumption_l_100km NUMERIC(4,1),
     reference_fuel_price NUMERIC(10,2),
+    -- The explicit on/off for that line. Without it the only way to remove the
+    -- comparison was to have no price, which is a side effect rather than a setting.
+    -- (Alembic 20260731_000019)
+    fuel_comparison_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT users_reference_consumption_chk
         CHECK (reference_consumption_l_100km IS NULL OR reference_consumption_l_100km BETWEEN 1 AND 50),
@@ -39,6 +43,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'us
 ALTER TABLE users ADD COLUMN IF NOT EXISTS climate_zone VARCHAR(32);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_consumption_l_100km NUMERIC(4,1);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_fuel_price NUMERIC(10,2);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS fuel_comparison_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 
@@ -394,7 +399,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260731_000018'
+SELECT '20260731_000019'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

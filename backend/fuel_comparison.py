@@ -83,16 +83,42 @@ def resolve_basis(cur, user_id: str, profile: dict, start_date=None, end_date=No
     The `source` fields exist so the client can label the line honestly. "Your own
     fill-ups, averaged" and "the figure you entered" deserve different amounts of
     trust, and only the server knows which one it used.
+
+    A figure the user typed wins over one observed from their records. That is the
+    opposite of what this did at first, and the earlier way was wrong for a reason
+    worth keeping in mind: the observed price is whatever this account last happened to
+    pay for any fuel, which is not necessarily the price it wants to compare against —
+    a single tank of premium, or a work car's diesel, would quietly set the baseline for
+    everything. Someone who takes the trouble to enter a number means it.
+
+    `observed_price` is still reported, so the client can show what the records say
+    beside what the user chose.
     """
     configured_price = profile.get('reference_fuel_price')
     configured_consumption = profile.get('reference_consumption_l_100km')
 
     observed_price, fill_ups = observed_fuel_price(cur, user_id, start_date, end_date)
 
-    if observed_price is not None:
-        price, price_source = observed_price, 'observed'
-    elif configured_price is not None:
+    # Switched off suppresses the line, not the facts. The settings screen reads this
+    # same response to offer "your own fill-ups average X — use that", and blanking the
+    # observation here left that suggestion missing for exactly the people about to
+    # turn the comparison back on.
+    if not profile.get('fuel_comparison_enabled', True):
+        return {
+            'available': False,
+            'enabled': False,
+            'fuel_price_per_litre': None,
+            'fuel_price_source': 'disabled',
+            'observed_price_per_litre': round(observed_price, 2) if observed_price is not None else None,
+            'observed_fill_ups': fill_ups,
+            'consumption_l_100km': None,
+            'consumption_source': 'disabled',
+        }
+
+    if configured_price is not None:
         price, price_source = float(configured_price), 'configured'
+    elif observed_price is not None:
+        price, price_source = observed_price, 'observed'
     else:
         price, price_source = None, 'missing'
 
@@ -103,8 +129,12 @@ def resolve_basis(cur, user_id: str, profile: dict, start_date=None, end_date=No
 
     return {
         'available': price is not None,
+        'enabled': True,
         'fuel_price_per_litre': round(price, 2) if price is not None else None,
         'fuel_price_source': price_source,
+        # Reported even when it lost, so the settings screen can offer it as the figure
+        # the account's own records support.
+        'observed_price_per_litre': round(observed_price, 2) if observed_price is not None else None,
         'observed_fill_ups': fill_ups,
         'consumption_l_100km': consumption,
         'consumption_source': consumption_source,

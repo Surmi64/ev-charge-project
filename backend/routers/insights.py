@@ -79,7 +79,10 @@ def _reference_figures(db, cur, user_id: str) -> dict:
         return {}
     # users sits outside RLS, so this needs its own predicate rather than a policy.
     cur.execute(
-        'SELECT reference_consumption_l_100km, reference_fuel_price FROM users WHERE id = %s;',
+        'SELECT reference_consumption_l_100km, reference_fuel_price, fuel_comparison_enabled'
+        ' FROM users WHERE id = %s;'
+        if column_exists(db, 'users', 'fuel_comparison_enabled')
+        else 'SELECT reference_consumption_l_100km, reference_fuel_price FROM users WHERE id = %s;',
         (user_id,),
     )
     return cur.fetchone() or {}
