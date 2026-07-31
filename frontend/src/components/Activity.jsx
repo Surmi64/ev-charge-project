@@ -423,16 +423,27 @@ function Activity() {
                         <Typography variant="subtitle1" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
                           {fmt.money(item.amount)}
                         </Typography>
+                        {/* A tooltip is not an accessible name — a screen reader reads
+                            these as "button". Every row has the same two, so the label
+                            has to say which record it acts on. */}
                         <Tooltip title="Edit record">
                           <span>
-                            <IconButton size="small" color="primary" disabled={busy} onClick={() => handleEdit(item)}>
+                            <IconButton
+                              size="small" color="primary" disabled={busy}
+                              aria-label={`Edit the ${item.title} record from ${new Date(item.occurred_at).toLocaleDateString()}`}
+                              onClick={() => handleEdit(item)}
+                            >
                               <EditIcon fontSize="small" />
                             </IconButton>
                           </span>
                         </Tooltip>
                         <Tooltip title="Delete record">
                           <span>
-                            <IconButton size="small" color="error" disabled={busy} onClick={() => setPendingDelete(item)}>
+                            <IconButton
+                              size="small" color="error" disabled={busy}
+                              aria-label={`Delete the ${item.title} record from ${new Date(item.occurred_at).toLocaleDateString()}`}
+                              onClick={() => setPendingDelete(item)}
+                            >
                               <DeleteIcon fontSize="small" />
                             </IconButton>
                           </span>
