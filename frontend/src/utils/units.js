@@ -89,6 +89,31 @@ export function createFormatters(user) {
       money(Number(costPerHundredKm || 0) / distance.perKm),
     rawDistance: toDistance,
     rawVolume: toVolume,
+
+    /**
+     * Fuel price. Stored per litre; a gallon is the bigger container, so its price is
+     * higher — divide by the factor rather than multiplying, the same inversion as
+     * moneyPerHundred.
+     */
+    fuelPriceLabel: `per ${volume.short}`,
+    fuelPrice: (perLitre) => money(Number(perLitre || 0) / volume.perLitre),
+    toFuelPriceInput: (perLitre) =>
+      (perLitre == null ? '' : String(Math.round((perLitre / volume.perLitre) * 100) / 100)),
+    fromFuelPriceInput: (perDisplayVolume) => Number(perDisplayVolume || 0) * volume.perLitre,
+
+    /**
+     * Reference consumption, shown as volume per 100 distance rather than converted to
+     * mpg. Both terms move: litres become gallons, and 100 miles is the longer trip.
+     * Kept on the same "per 100" scale the rest of the app uses, so it stays comparable
+     * with the cost-per-100 figures beside it instead of running the opposite way.
+     */
+    consumptionLabel: `${volume.short} / 100 ${distance.short}`,
+    toConsumptionInput: (litresPer100Km) =>
+      (litresPer100Km == null
+        ? ''
+        : String(Math.round((litresPer100Km * volume.perLitre / distance.perKm) * 10) / 10)),
+    fromConsumptionInput: (displayValue) =>
+      Number(displayValue || 0) * distance.perKm / volume.perLitre,
   };
 }
 

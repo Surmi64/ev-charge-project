@@ -99,7 +99,8 @@ def load_user_profile(db, user_id) -> dict | None:
         columns.append('theme_mode')
     if column_exists(db, 'users', 'dismissed_alerts'):
         columns.append('dismissed_alerts')
-    for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone', 'onboarded_at'):
+    for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone',
+                       'reference_consumption_l_100km', 'reference_fuel_price', 'onboarded_at'):
         if column_exists(db, 'users', preference):
             columns.append(preference)
 
@@ -117,6 +118,11 @@ def load_user_profile(db, user_id) -> dict | None:
     # Left as None rather than defaulted: the client has to be able to tell an account
     # that answered "temperate continental" from one that was never asked.
     user.setdefault('climate_zone', None)
+    # Left as None on purpose: "not answered" has to stay distinguishable from a real
+    # figure, because an unanswered fuel price means the comparison is not drawn at all.
+    for reference in ('reference_consumption_l_100km', 'reference_fuel_price'):
+        value = user.get(reference)
+        user[reference] = float(value) if value is not None else None
     user['onboarded_at'] = user['onboarded_at'].isoformat() if user.get('onboarded_at') else None
     return user
 
@@ -443,6 +449,8 @@ def update_profile(
     distance_unit: str | None = Body(None),
     volume_unit: str | None = Body(None),
     climate_zone: str | None = Body(None),
+    reference_consumption_l_100km: float | None = Body(None),
+    reference_fuel_price: float | None = Body(None),
     onboarding_complete: bool | None = Body(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
@@ -513,6 +521,20 @@ def update_profile(
         updates.append('climate_zone = %s')
         values.append(climate_zone)
 
+    # Bounds mirror the CHECK constraints rather than trusting them to produce a usable
+    # error: a violated constraint surfaces as a 500, and these are user-entered numbers.
+    if reference_consumption_l_100km is not None and column_exists(db, 'users', 'reference_consumption_l_100km'):
+        if not 1 <= reference_consumption_l_100km <= 50:
+            raise HTTPException(status_code=400, detail='Reference consumption must be between 1 and 50 l/100 km')
+        updates.append('reference_consumption_l_100km = %s')
+        values.append(reference_consumption_l_100km)
+
+    if reference_fuel_price is not None and column_exists(db, 'users', 'reference_fuel_price'):
+        if reference_fuel_price <= 0:
+            raise HTTPException(status_code=400, detail='Fuel price must be greater than zero')
+        updates.append('reference_fuel_price = %s')
+        values.append(reference_fuel_price)
+
     # Skipping sets this too. The flag means "we have asked", not "they answered".
     if onboarding_complete and column_exists(db, 'users', 'onboarded_at'):
         updates.append('onboarded_at = NOW()')
@@ -536,7 +558,9 @@ def update_profile(
             changed_fields.append('theme_mode')
         if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
             changed_fields.append('dismissed_alerts')
-        for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit), ('climate_zone', climate_zone)):
+        for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit), ('climate_zone', climate_zone),
+                            ('reference_consumption_l_100km', reference_consumption_l_100km),
+                            ('reference_fuel_price', reference_fuel_price)):
             if value is not None and column_exists(db, 'users', name):
                 changed_fields.append(name)
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})

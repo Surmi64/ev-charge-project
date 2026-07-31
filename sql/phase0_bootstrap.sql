@@ -22,11 +22,23 @@ CREATE TABLE IF NOT EXISTS users (
     -- lets the UI offer to correct it. No CHECK: the zone list lives in
     -- backend/climate.py and grows. (Alembic 20260731_000016)
     climate_zone VARCHAR(32),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    -- What a combustion car would have used over the same distance, and what that fuel
+    -- costs per litre in this account's currency. Both NULL means "not answered": an
+    -- invented fuel price would draw a comparison line that looks exactly as
+    -- authoritative as a real one. (Alembic 20260731_000018)
+    reference_consumption_l_100km NUMERIC(4,1),
+    reference_fuel_price NUMERIC(10,2),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT users_reference_consumption_chk
+        CHECK (reference_consumption_l_100km IS NULL OR reference_consumption_l_100km BETWEEN 1 AND 50),
+    CONSTRAINT users_reference_fuel_price_chk
+        CHECK (reference_fuel_price IS NULL OR reference_fuel_price > 0)
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS climate_zone VARCHAR(32);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_consumption_l_100km NUMERIC(4,1);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_fuel_price NUMERIC(10,2);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 
@@ -382,7 +394,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260731_000017'
+SELECT '20260731_000018'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

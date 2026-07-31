@@ -41,7 +41,7 @@ import {
 import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
-import { getChartColors } from '../utils/chartColors';
+import { getChartColors, getSeriesColor } from '../utils/chartColors';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
@@ -177,6 +177,9 @@ const Analytics = () => {
   // here, so the axis can never disagree with the data it is labelling. Falls back to
   // months for the first render, before any response has arrived.
   const trendBucket = data?.trend_bucket || 'month';
+  // What the server actually used for the petrol line — which figures, and whether they
+  // came from the account's own fill-ups or from what it configured.
+  const comparison = data?.fuel_comparison || null;
   const trendTick = useMemo(() => buildTickLabel(trendBucket), [trendBucket]);
   const trendTooltipLabel = useMemo(() => buildTooltipLabel(trendBucket), [trendBucket]);
   const trendNoun = BUCKET_NOUN[trendBucket] || 'month';
@@ -489,9 +492,42 @@ const Analytics = () => {
                   <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" name={`Cost per 100 ${fmt.distanceShort}`}
                     stroke={theme.palette.warning.main} strokeWidth={2} dot={false} connectNulls={false}
                     isAnimationActive={chartAnimation} />
+                  {/* On the cost axis, not the efficiency one: this is money, and it is
+                      meant to be read against the driving-spend bars it sits over.
+                      Dashed so it reads as a hypothetical rather than something that
+                      happened, and the dash also separates it from the solid cost-per-100
+                      line without relying on colour alone.
+
+                      Rendered only when the server had a real fuel price. The backend
+                      omits the key entirely rather than sending null, so an unconfigured
+                      account gets no line instead of one flat along zero.
+
+                      Violet rather than the amber at series index 3: that one is within
+                      a hair of theme.palette.warning.main, which the cost-per-100 line
+                      already uses, and two lines on one chart in near-identical colour
+                      would leave the dash pattern doing all the work. */}
+                  {comparison?.available ? (
+                    <Line yAxisId="cost" type="monotone" dataKey="petrol_equivalent_cost"
+                      name="Same distance on petrol"
+                      stroke={getSeriesColor(theme, 4)} strokeWidth={2} strokeDasharray="7 4"
+                      dot={false} connectNulls={false} isAnimationActive={chartAnimation} />
+                  ) : null}
                 </ComposedChart>
               </ResponsiveContainer>
             </Box>
+            {/* The line is a hypothetical built on two numbers, so it says which ones.
+                An unlabelled comparison invites the reader to trust it more than it
+                has earned. */}
+            {comparison?.available ? (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                Petrol line assumes {fmt.toConsumptionInput(comparison.consumption_l_100km)} {fmt.consumptionLabel}
+                {' at '}{fmt.fuelPrice(comparison.fuel_price_per_litre)} {fmt.fuelPriceLabel}
+                {comparison.fuel_price_source === 'observed'
+                  ? `, averaged from your own ${comparison.observed_fill_ups} fill-up${comparison.observed_fill_ups === 1 ? '' : 's'}`
+                  : ''}
+                . Fuel only — it excludes insurance, tax and servicing on both sides.
+              </Typography>
+            ) : null}
           </Card>
 
           {/* Which car is cheapest to run, answered directly. */}

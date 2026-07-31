@@ -6,15 +6,17 @@ try:
     from backend.activity import get_activity_feed
     from backend.auth_utils import get_current_user_id
     from backend.billing import get_tenant_db, require_write_access
-    from backend.db import get_db
+    from backend.db import column_exists, get_db
     from backend.forecast import build_forecast
+    from backend.fuel_comparison import annotate_trend, resolve_basis
     from backend.routers.vehicles import has_archive_support
 except ModuleNotFoundError:
     from activity import get_activity_feed
     from auth_utils import get_current_user_id
     from billing import get_tenant_db, require_write_access
-    from db import get_db
+    from db import column_exists, get_db
     from forecast import build_forecast
+    from fuel_comparison import annotate_trend, resolve_basis
     from routers.vehicles import has_archive_support
 
 router = APIRouter(tags=['insights'])
@@ -69,6 +71,18 @@ def _get_previous_month(value: date) -> date:
 
 
 _TREND_BUCKETS = frozenset({'day', 'week', 'month'})
+
+
+def _reference_figures(db, cur, user_id: str) -> dict:
+    """The account's configured comparison figures, empty on a database without them."""
+    if not column_exists(db, 'users', 'reference_fuel_price'):
+        return {}
+    # users sits outside RLS, so this needs its own predicate rather than a policy.
+    cur.execute(
+        'SELECT reference_consumption_l_100km, reference_fuel_price FROM users WHERE id = %s;',
+        (user_id,),
+    )
+    return cur.fetchone() or {}
 
 
 def _trend_bucket_for_range(normalized_range: str) -> str:
@@ -735,11 +749,18 @@ def get_analytics_summary(
     expense_cost = sum(row['expense_cost'] for row in serialized_vehicle_stats)
     avg_cost_per_100km = (total_operating_cost / total_distance_km * 100) if total_distance_km > 0 else 0
 
+    # What the same kilometres would have cost as petrol. Added after the trend is
+    # built so it uses exactly the distance the chart draws — deriving it separately
+    # would let the line disagree with the bars beside it.
+    comparison = resolve_basis(cur, user_id, _reference_figures(db, cur, user_id), start_date, end_date)
+    annotate_trend(trend, comparison)
+
     return {
         'range': normalized_range,
         'weekly_trend': [{'week': row['week'], 'energy': float(row['energy'] or 0)} for row in weekly_trend],
         'trend_bucket': trend_bucket,
         'trend': trend,
+        'fuel_comparison': comparison,
         'vehicle_stats': serialized_vehicle_stats,
         'expense_categories': [
             {

@@ -4,6 +4,7 @@ import { alpha } from '@mui/material/styles';
 import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
 import ClimateSettings from './ClimateSettings';
+import FuelComparisonSettings from './FuelComparisonSettings';
 import { toast } from 'sonner';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -243,6 +244,8 @@ const Profile = () => {
                 <UnitSettings />
 
                 <ClimateSettings />
+
+                <FuelComparisonSettings />
 
                 <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper', boxShadow: `0 0 24px ${alpha(theme.palette.secondary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
                     <Typography className="industrial-kicker" sx={{ mb: 0.5 }}>Telemetry</Typography>
