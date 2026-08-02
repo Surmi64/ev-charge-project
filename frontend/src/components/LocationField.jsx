@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
@@ -30,10 +29,18 @@ import { isGeolocationAvailable, useGeolocation, VAGUE_ACCURACY_M } from '../uti
  * fix still files the record against a place already on the list. So neither field
  * requires the other, and the whole section is skippable.
  *
- * The name is an Autocomplete over places already used rather than a plain text field,
- * because "MOL Váci út" and "Mol váci ut" are the same forecourt to a human and two
- * different places to a database. Picking beats typing.
+ * Picking beats typing, because "MOL Váci út" and "Mol váci ut" are the same forecourt
+ * to a human and two different places to a database. The suggestions are inline chips
+ * rather than a dropdown: an Autocomplete popup is an overlay, and on a phone — where
+ * the field and the locate button stack vertically — it opened over the button and
+ * could only be dismissed by tapping the very thing it was covering. Chips push the
+ * layout down instead of covering it, and there is nothing to close.
  */
+
+// Enough to recognise a regular haunt without turning the dialog into a list. The
+// account's places arrive most-visited first, so this keeps the ones actually worth
+// offering.
+const SUGGESTION_LIMIT = 6;
 const LocationField = ({ value, onChange, disabled }) => {
   const [places, setPlaces] = useState([]);
   const [match, setMatch] = useState(null);
@@ -68,22 +75,20 @@ const LocationField = ({ value, onChange, disabled }) => {
   // A fresh fix arrives from the hook; push it into the form and ask what it matches.
   useEffect(() => {
     if (!position) return;
+    // Coordinates only. This used to send `place_name` on both calls, which meant the
+    // name the user was typing while the lookup was in flight got written back from a
+    // stale closure. The parent merges, so leaving the key out keeps whatever is there.
     onChange({
       latitude: position.latitude,
       longitude: position.longitude,
       location_accuracy_m: position.accuracy_m,
-      // An existing name the user already typed wins — they know where they are better
-      // than a 40 m radius does.
-      place_name: value.place_name || '',
     });
     lookup(position.latitude, position.longitude).then((found) => {
+      // The fix landed within MATCH_RADIUS_M of a place already on the account, so fill
+      // its name in. A name the user typed themselves wins — they know where they are
+      // better than a 150 m radius does.
       if (found && !value.place_name) {
-        onChange({
-          latitude: position.latitude,
-          longitude: position.longitude,
-          location_accuracy_m: position.accuracy_m,
-          place_name: found.name,
-        });
+        onChange({ place_name: found.name });
       }
     });
     // onChange and value.place_name deliberately omitted: this must run when a new fix
@@ -97,8 +102,32 @@ const LocationField = ({ value, onChange, disabled }) => {
     onChange({ latitude: null, longitude: null, location_accuracy_m: null, place_name: '' });
   };
 
-  const hasFix = value.latitude != null && value.longitude != null;
-  const vague = hasFix && value.location_accuracy_m != null && value.location_accuracy_m > VAGUE_ACCURACY_M;
+  // What is in the field right now, normalised the same way a chip's label is, so the
+  // one the user picked (or the button filled in) shows as selected.
+  const selectedName = (value.place_name || '').trim().toLowerCase();
+
+  // Narrowing as they type is what the dropdown did well, and it costs nothing to keep.
+  // An exact match stays in the list rather than being filtered out, because that is
+  // what marks the chip as selected — the confirmation that this is a place already on
+  // the account, and not a near-miss spelling that will create a second one.
+  const suggestions = useMemo(() => {
+    const matching = selectedName
+      ? places.filter((place) => place.name.trim().toLowerCase().includes(selectedName))
+      : places;
+    return matching.slice(0, SUGGESTION_LIMIT);
+  }, [places, selectedName]);
+
+  // Coerced rather than trusted. The API is supposed to send numbers, but a NUMERIC
+  // column that reaches JSON as a string used to reach .toFixed here and throw during
+  // render, which unmounts the whole dialog rather than degrading one chip. A location
+  // is optional decoration on the record; it must never be able to do that.
+  const lat = Number(value.latitude);
+  const lon = Number(value.longitude);
+  const hasFix = value.latitude != null && value.longitude != null
+    && Number.isFinite(lat) && Number.isFinite(lon);
+  const accuracy = Number(value.location_accuracy_m);
+  const hasAccuracy = value.location_accuracy_m != null && Number.isFinite(accuracy);
+  const vague = hasFix && hasAccuracy && accuracy > VAGUE_ACCURACY_M;
 
   return (
     <Box>
@@ -109,25 +138,20 @@ const LocationField = ({ value, onChange, disabled }) => {
 
       <Stack spacing={1.5}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'flex-start' }}>
-          <Autocomplete
-            freeSolo
+          <TextField
             fullWidth
             disabled={disabled}
-            options={places.map((place) => place.name)}
+            label="Place"
+            placeholder="MOL Váci út, Home…"
             value={value.place_name || ''}
-            onInputChange={(_event, next) => onChange({ ...value, place_name: next })}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Place"
-                placeholder="MOL Váci út, Home…"
-                helperText={
-                  places.length
-                    ? 'Pick one you have used before, or type a new name.'
-                    : 'Name it once and it will be offered next time.'
-                }
-              />
-            )}
+            onChange={(event) => onChange({ place_name: event.target.value })}
+            helperText={
+              suggestions.length
+                ? 'Type a name, tap one below, or let the button fill it in.'
+                : places.length
+                  ? 'No match among your places — this will be saved as a new one.'
+                  : 'Name it once and it will be offered next time.'
+            }
           />
           <Tooltip
             title={supported
@@ -148,13 +172,30 @@ const LocationField = ({ value, onChange, disabled }) => {
           </Tooltip>
         </Stack>
 
+        {suggestions.length ? (
+          <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap alignItems="center">
+            {suggestions.map((place) => (
+              <Chip
+                key={place.id}
+                size="small"
+                variant={selectedName === place.name.trim().toLowerCase() ? 'filled' : 'outlined'}
+                color={selectedName === place.name.trim().toLowerCase() ? 'primary' : 'default'}
+                label={place.name}
+                disabled={disabled}
+                onClick={() => onChange({ place_name: place.name })}
+                aria-label={`Use place ${place.name}`}
+              />
+            ))}
+          </Stack>
+        ) : null}
+
         {hasFix ? (
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
             <Chip
               size="small"
               icon={<PlaceIcon />}
-              label={`${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}${
-                value.location_accuracy_m != null ? ` · ±${Math.round(value.location_accuracy_m)} m` : ''
+              label={`${lat.toFixed(5)}, ${lon.toFixed(5)}${
+                hasAccuracy ? ` · ±${Math.round(accuracy)} m` : ''
               }`}
             />
             {matching ? <CircularProgress size={14} /> : null}
@@ -177,7 +218,7 @@ const LocationField = ({ value, onChange, disabled }) => {
 
         {vague ? (
           <Alert severity="warning" sx={{ py: 0 }}>
-            That fix is only accurate to about {Math.round(value.location_accuracy_m)} m, so it will be
+            That fix is only accurate to about {Math.round(accuracy)} m, so it will be
             saved but not used to recognise a place. Naming it yourself will still work.
           </Alert>
         ) : null}
