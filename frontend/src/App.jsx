@@ -25,6 +25,7 @@ import AdminPage from './components/AdminPage';
 import PasswordRecoveryPage from './components/PasswordRecoveryPage';
 import Billing from './components/Billing';
 import { useAuth } from './context/useAuth';
+import { BRAND, SURFACE, ON_BRAND } from './utils/palette';
 
 
 
@@ -65,31 +66,40 @@ function App() {
 
   const theme = useMemo(() => {
     const darkMode = themeMode === 'dark';
-    // Light-mode brand values are darkened so they clear WCAG AA (4.5:1) both as
-    // text on a light surface and as a button background under #F7FBFC label text.
-    // The previous values (#0F8FA5 / #C3479F / #2F8F59) sat at 3.7:1 / 4.3:1 / 4.0:1.
-    const primaryMain = darkMode ? '#00F5FF' : '#0A6F80';
-    const secondaryMain = darkMode ? '#FF00E5' : '#A32F80';
-    const successMain = darkMode ? '#87FF65' : '#277A4B';
-    const backgroundDefault = darkMode ? '#070B0F' : '#EEF3F6';
-    const backgroundPaper = darkMode ? 'rgba(12, 18, 24, 0.82)' : 'rgba(255, 255, 255, 0.78)';
-    const lineColor = darkMode ? 'rgba(185, 214, 231, 0.12)' : 'rgba(31, 51, 64, 0.12)';
-    const textPrimary = darkMode ? '#EDF7FF' : '#0B141A';
-    const textSecondary = darkMode ? 'rgba(228, 236, 243, 0.68)' : 'rgba(36, 51, 63, 0.74)';
+    // Every colour here comes from utils/palette.js. Light-mode brand values are
+    // darkened so they clear WCAG AA (4.5:1) both as text on a light surface and as
+    // a button background under the ON_BRAND label ink; the pre-contrast values
+    // (#0F8FA5 / #C3479F / #2F8F59) sat at 3.7:1 / 4.3:1 / 4.0:1.
+    //
+    // warning and error used to fall through to MUI's Material orange and red,
+    // which were the only two colours in the app that belonged to no palette.
+    // They are now the brand amber and red, the same hues the charts use.
+    const brand = BRAND[themeMode];
+    const surface = SURFACE[themeMode];
+    const onBrand = ON_BRAND[themeMode];
+    const primaryMain = brand.cyan;
+    const secondaryMain = brand.magenta;
+    const backgroundDefault = surface.background;
+    const backgroundPaper = surface.paper;
+    const lineColor = surface.line;
+    const textPrimary = surface.textPrimary;
+    const textSecondary = surface.textSecondary;
     const surfaceBlur = darkMode ? 'blur(10px)' : 'blur(10px)';
     const paperShadow = darkMode
-      ? '0 12px 26px rgba(0, 0, 0, 0.24)'
-      : '0 18px 38px rgba(28, 45, 56, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.6) inset';
+      ? `0 12px 26px rgba(${surface.shadow}, 0.24)`
+      : `0 18px 38px rgba(${surface.shadow}, 0.08), 0 0 0 1px ${alpha(surface.sheen, 0.6)} inset`;
     const cardShadow = darkMode
-      ? `0 0 0 1px ${alpha('#FFFFFF', 0.03)} inset, 0 0 14px ${alpha(primaryMain, 0.05)}, 0 10px 22px rgba(0, 0, 0, 0.24)`
-      : `0 18px 34px rgba(27, 43, 54, 0.08), 0 0 0 1px ${alpha('#FFFFFF', 0.72)} inset, 0 0 0 1px ${alpha(primaryMain, 0.05)}`;
+      ? `0 0 0 1px ${alpha(surface.sheen, 0.03)} inset, 0 0 14px ${alpha(primaryMain, 0.05)}, 0 10px 22px rgba(${surface.shadow}, 0.24)`
+      : `0 18px 34px rgba(${surface.shadow}, 0.08), 0 0 0 1px ${alpha(surface.sheen, 0.72)} inset, 0 0 0 1px ${alpha(primaryMain, 0.05)}`;
 
     return createTheme({
       palette: {
         mode: themeMode,
         primary: { main: primaryMain },
         secondary: { main: secondaryMain },
-        success: { main: successMain },
+        success: { main: brand.green },
+        warning: { main: brand.amber },
+        error: { main: brand.red },
         background: {
           default: backgroundDefault,
           paper: backgroundPaper,
@@ -162,17 +172,20 @@ function App() {
         MuiCssBaseline: {
           styleOverrides: {
             body: {
+              // The light wash used to be mixed from #0F8FA5 / #C3479F, the brand
+              // values from before the contrast pass -- close enough to look
+              // deliberate, far enough to be a second light brand.
               backgroundImage: darkMode
                 ? [
-                    'radial-gradient(circle at 10% 0%, rgba(0, 245, 255, 0.14), transparent 22%)',
-                    'radial-gradient(circle at 90% 18%, rgba(255, 0, 229, 0.12), transparent 18%)',
-                    'linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 16%)',
+                    `radial-gradient(circle at 10% 0%, ${alpha(primaryMain, 0.14)}, transparent 22%)`,
+                    `radial-gradient(circle at 90% 18%, ${alpha(secondaryMain, 0.12)}, transparent 18%)`,
+                    `linear-gradient(180deg, ${alpha(surface.sheen, 0.02)}, transparent 16%)`,
                   ].join(',')
                 : [
                     'repeating-linear-gradient(90deg, rgba(27, 43, 54, 0.03) 0 1px, transparent 1px 96px)',
-                    'radial-gradient(circle at 12% 0%, rgba(15, 143, 165, 0.08), transparent 24%)',
-                    'radial-gradient(circle at 88% 14%, rgba(195, 71, 159, 0.08), transparent 20%)',
-                    'linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(232, 239, 243, 0.98))',
+                    `radial-gradient(circle at 12% 0%, ${alpha(primaryMain, 0.08)}, transparent 24%)`,
+                    `radial-gradient(circle at 88% 14%, ${alpha(secondaryMain, 0.08)}, transparent 20%)`,
+                    `linear-gradient(145deg, ${alpha(surface.sheen, 0.82)}, ${alpha(surface.tint, 0.98)})`,
                   ].join(','),
             },
             '*': {
@@ -193,8 +206,8 @@ function App() {
               border: `1px solid ${lineColor}`,
               boxShadow: paperShadow,
               backgroundImage: darkMode
-                ? `linear-gradient(145deg, ${alpha('#FFFFFF', 0.04)}, ${alpha('#FFFFFF', 0.01)})`
-                : `linear-gradient(145deg, ${alpha('#FFFFFF', 0.92)}, ${alpha('#E8F0F4', 0.74)})`,
+                ? `linear-gradient(145deg, ${alpha(surface.sheen, 0.04)}, ${alpha(surface.sheen, 0.01)})`
+                : `linear-gradient(145deg, ${alpha(surface.sheen, 0.92)}, ${alpha(surface.tint, 0.74)})`,
               transition: 'box-shadow 140ms ease, border-color 140ms ease, background-color 140ms ease',
             },
           },
@@ -203,10 +216,10 @@ function App() {
           styleOverrides: {
             root: {
               backdropFilter: surfaceBlur,
-              border: `1px solid ${darkMode ? alpha(primaryMain, 0.18) : alpha('#0F1A22', 0.1)}`,
+              border: `1px solid ${darkMode ? alpha(primaryMain, 0.18) : alpha(textPrimary, 0.1)}`,
               backgroundImage: darkMode
-                ? `linear-gradient(145deg, ${alpha('#FFFFFF', 0.04)}, ${alpha('#FFFFFF', 0.015)})`
-                : `linear-gradient(145deg, ${alpha('#FFFFFF', 0.96)}, ${alpha('#EEF4F7', 0.82)})`,
+                ? `linear-gradient(145deg, ${alpha(surface.sheen, 0.04)}, ${alpha(surface.sheen, 0.015)})`
+                : `linear-gradient(145deg, ${alpha(surface.sheen, 0.96)}, ${alpha(surface.tint, 0.82)})`,
               boxShadow: cardShadow,
               transition: 'box-shadow 140ms ease, border-color 140ms ease, background-color 140ms ease',
             },
@@ -222,18 +235,18 @@ function App() {
             },
             contained: {
               backgroundImage: `linear-gradient(135deg, ${primaryMain}, ${secondaryMain})`,
-              color: darkMode ? '#061015' : '#F7FBFC',
+              color: onBrand,
               boxShadow: darkMode ? `0 0 12px ${alpha(primaryMain, 0.22)}` : `0 10px 20px ${alpha(primaryMain, 0.18)}`,
             },
             // `contained` paints every filled button with the brand gradient regardless
             // of colour, which left destructive confirmations looking exactly like an
             // ordinary primary action -- delete a vehicle, delete a record, delete an
-            // account. Measured with the same ink the gradient uses: #061015 on #f44336
-            // is 5.2:1, #F7FBFC on #d32f2f is 5.0:1.
+            // account. Measured with the same ink the gradient uses: #061015 on the
+            // dark red is 7.6:1, #F7FBFC on the light red is 5.4:1.
             containedError: ({ theme: muiTheme }) => ({
               backgroundImage: 'none',
               backgroundColor: muiTheme.palette.error.main,
-              color: darkMode ? '#061015' : '#F7FBFC',
+              color: onBrand,
               boxShadow: darkMode
                 ? `0 0 12px ${alpha(muiTheme.palette.error.main, 0.3)}`
                 : `0 10px 20px ${alpha(muiTheme.palette.error.main, 0.22)}`,
@@ -241,7 +254,7 @@ function App() {
             }),
             outlined: {
               borderColor: darkMode ? alpha(primaryMain, 0.45) : alpha(primaryMain, 0.24),
-              backgroundColor: darkMode ? 'transparent' : alpha('#FFFFFF', 0.48),
+              backgroundColor: darkMode ? 'transparent' : alpha(surface.sheen, 0.48),
               '&:hover': {
                 borderColor: primaryMain,
                 backgroundColor: darkMode ? alpha(primaryMain, 0.08) : alpha(primaryMain, 0.08),
@@ -253,7 +266,7 @@ function App() {
           styleOverrides: {
             root: {
               borderRadius: 4,
-              backgroundColor: darkMode ? alpha('#081017', 0.68) : alpha('#FFFFFF', 0.82),
+              backgroundColor: darkMode ? alpha(surface.tint, 0.68) : alpha(surface.sheen, 0.82),
               transition: 'border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease',
               '& fieldset': {
                 borderColor: darkMode ? alpha(primaryMain, 0.22) : alpha(primaryMain, 0.16),
@@ -305,7 +318,7 @@ function App() {
           styleOverrides: {
             head: {
               borderBottomColor: lineColor,
-              color: darkMode ? alpha('#EAF7FF', 0.86) : alpha(textPrimary, 0.82),
+              color: alpha(textPrimary, darkMode ? 0.86 : 0.82),
               fontFamily: `"Rajdhani", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif`,
               fontSize: '0.82rem',
               letterSpacing: '0.08em',
@@ -320,7 +333,9 @@ function App() {
           styleOverrides: {
             paper: {
               borderRadius: 8,
-              boxShadow: darkMode ? `0 0 18px ${alpha(primaryMain, 0.08)}, 0 14px 34px rgba(0, 0, 0, 0.3)` : '0 18px 38px rgba(22, 37, 48, 0.12)',
+              boxShadow: darkMode
+                ? `0 0 18px ${alpha(primaryMain, 0.08)}, 0 14px 34px rgba(${surface.shadow}, 0.3)`
+                : `0 18px 38px rgba(${surface.shadow}, 0.12)`,
             },
           },
         },

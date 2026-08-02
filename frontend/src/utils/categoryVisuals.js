@@ -1,20 +1,22 @@
 import { alpha } from '@mui/material/styles';
 
+import { BRAND, FUEL_ACCENT } from './palette';
+
 // `color` is the hue used for borders and glows in both themes.
 // `text` is the label colour, and it has to differ per theme: the light tints below
 // were designed against a dark surface and land at ~1.1:1 on the near-white chip
 // background in light mode. `textLight` keeps the same hue but is darkened until it
 // clears 4.5:1 there.
 export const CATEGORY_VISUALS = {
-  charging: { color: '#00F5FF', text: '#CFFBFF', textLight: '#007F85' },
-  fueling: { color: '#FFB547', text: '#FFF0CF', textLight: '#A86400' },
-  maintenance: { color: '#87FF65', text: '#E2FFD9', textLight: '#1E8900' },
-  insurance: { color: '#6AC6FF', text: '#E0F4FF', textLight: '#007AC6' },
-  parking: { color: '#9F7BFF', text: '#E9E1FF', textLight: '#8152FF' },
-  toll: { color: '#FF8A5B', text: '#FFE2D7', textLight: '#D53D00' },
-  tax: { color: '#FFD447', text: '#FFF5C4', textLight: '#937100' },
-  inspection: { color: '#7CF2C9', text: '#DFFFF2', textLight: '#0D855C' },
-  cleaning: { color: '#C7F464', text: '#F4FFD0', textLight: '#597E09' },
+  charging: { color: BRAND.dark.cyan, text: '#CFFBFF', textLight: '#007F85' },
+  fueling: { color: FUEL_ACCENT.petrol, text: '#FFF0CF', textLight: '#A86400' },
+  maintenance: { color: BRAND.dark.green, text: '#E2FFD9', textLight: '#1E8900' },
+  insurance: { color: '#79B4D9', text: '#E0F4FF', textLight: '#007AC6' },
+  parking: { color: '#A48BD9', text: '#E9E1FF', textLight: '#7B5BD1' },
+  toll: { color: '#D9866B', text: '#FFE2D7', textLight: '#D53D00' },
+  tax: { color: '#D9BE6B', text: '#FFF5C4', textLight: '#937100' },
+  inspection: { color: '#7FCFB4', text: '#DFFFF2', textLight: '#0D855C' },
+  cleaning: { color: '#B4CE7A', text: '#F4FFD0', textLight: '#597E09' },
   other: { color: '#B9C6D1', text: '#EEF3F7', textLight: '#5E788E' },
 };
 

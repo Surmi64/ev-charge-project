@@ -116,8 +116,12 @@ const Profile = () => {
 
     const formatEventLabel = (value) => value.replace(/_/g, ' ');
 
+    // These were the dark-mode brand green, red and amber written out by hand, which
+    // meant the audit-log chips kept their neons in light mode and landed near 1:1.
     const getStatusChipSx = (status) => {
-        const color = status === 'success' ? '#87FF65' : status === 'failed' ? '#FF7A7A' : '#FFD447';
+        const color = status === 'success' ? theme.palette.success.main
+            : status === 'failed' ? theme.palette.error.main
+                : theme.palette.warning.main;
 
         return {
             color,

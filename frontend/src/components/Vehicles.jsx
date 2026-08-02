@@ -18,6 +18,7 @@ import {
 import { toast } from 'sonner';
 import { requiresBatteryCapacity, supportsHeatPump } from '../utils/vehicleRules';
 import { getFuelBoxSx, getFuelChipSx } from '../utils/fuelVisuals';
+import { DEFAULT_VEHICLE_COLOR } from '../utils/palette';
 import { TableSectionSkeleton } from './SectionSkeletons';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
@@ -69,7 +70,7 @@ const validateVehicleForm = (formData) => {
   }
 
   if (formData.color_hex && !HEX_COLOR_PATTERN.test(formData.color_hex.trim())) {
-    errors.color_hex = 'Use a hex color like #00F5FF.';
+    errors.color_hex = `Use a hex color like ${DEFAULT_VEHICLE_COLOR}.`;
   }
 
   if (requiresBatteryCapacity(formData.fuel_type) && formData.battery_capacity_kwh && Number(formData.battery_capacity_kwh) < 0) {
@@ -107,7 +108,7 @@ const Vehicles = () => {
   const [formData, setFormData] = useState({
     name: '', make: '', model: '', fuel_type: 'electric',
     year: '', license_plate: '', battery_capacity_kwh: '', tank_capacity_liters: '',
-    starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false,
+    starting_odometer_km: '', color_hex: DEFAULT_VEHICLE_COLOR, notes: '', is_default: false,
     has_heat_pump: false
   });
 
@@ -146,7 +147,7 @@ const Vehicles = () => {
         battery_capacity_kwh: vehicle.battery_capacity_kwh || '',
         tank_capacity_liters: vehicle.tank_capacity_liters || '',
         starting_odometer_km: vehicle.starting_odometer_km || '',
-        color_hex: vehicle.color_hex || '#00F5FF',
+        color_hex: vehicle.color_hex || DEFAULT_VEHICLE_COLOR,
         notes: vehicle.notes || '',
         is_default: !!vehicle.is_default,
         // A vehicle that predates the question stores null; the box shows unchecked,
@@ -158,7 +159,7 @@ const Vehicles = () => {
       setFormData({
         name: '', make: '', model: '', fuel_type: 'electric',
         year: '', license_plate: '', battery_capacity_kwh: '', tank_capacity_liters: '',
-        starting_odometer_km: '', color_hex: '#00F5FF', notes: '', is_default: false,
+        starting_odometer_km: '', color_hex: DEFAULT_VEHICLE_COLOR, notes: '', is_default: false,
         has_heat_pump: false
       });
     }

@@ -1,40 +1,44 @@
 import { alpha } from '@mui/material/styles';
 
-// `text` is tuned for dark surfaces (~10:1 there) but drops to ~1.0:1 on the light
-// tinted chip background, so `textLight` carries a darkened version of the same hue.
+import { FUEL_ACCENT } from './palette';
+
+// `primary` is the identity hue from utils/palette.js; `secondary` and `border` are
+// the shading around it. `text` is tuned for dark surfaces (~10:1 there) but drops
+// to ~1.0:1 on the light tinted chip background, so `textLight` carries a darkened
+// version of the same hue.
 const FUEL_VISUALS = {
   electric: {
-    primary: '#87FF65',
-    secondary: '#2FFFA8',
-    border: '#65C86B',
+    primary: FUEL_ACCENT.electric,
+    secondary: '#6FD9A8',
+    border: '#79BE7F',
     text: '#D8FFD2',
     textLight: '#1C7E00',
   },
   hybrid: {
-    primary: '#58C7FF',
-    secondary: '#8A7DFF',
-    border: '#58AFFF',
+    primary: FUEL_ACCENT.hybrid,
+    secondary: '#9A93DE',
+    border: '#7AA8D9',
     text: '#DDF5FF',
     textLight: '#0071AA',
   },
   petrol: {
-    primary: '#FFB547',
+    primary: FUEL_ACCENT.petrol,
     secondary: '#8B5A2B',
-    border: '#C7922C',
+    border: '#BE9A5B',
     text: '#FFF0CF',
     textLight: '#995B00',
   },
   diesel: {
-    primary: '#E4A64C',
+    primary: FUEL_ACCENT.diesel,
     secondary: '#6F4F2F',
-    border: '#B9832A',
+    border: '#B08D5E',
     text: '#FBEACC',
     textLight: '#915E16',
   },
   hydrogen: {
-    primary: '#3FE0D0',
-    secondary: '#2AA9C4',
-    border: '#35C4B5',
+    primary: FUEL_ACCENT.hydrogen,
+    secondary: '#5F9EB4',
+    border: '#6BB8AE',
     text: '#D2FFF9',
     textLight: '#13786E',
   },
@@ -67,12 +71,16 @@ export function getFuelBoxSx(theme, fuelType, options = {}) {
     p: compact ? 1.5 : 2,
     borderRadius: compact ? 3 : 4,
     border: `1px solid ${alpha(visual.border, 0.9)}`,
+    // The base under the two accent washes used to be a pair of browns (#1A1308 /
+    // #120F0A) left over from a petrol-only design, so an electric or hydrogen card
+    // sat on a warm tint that fought its own hue. It is the app surface now, and the
+    // fuel identity comes only from the accents on top.
     background: borderOnly
       ? alpha(theme.palette.background.paper, theme.palette.mode === 'dark' ? 0.72 : 0.94)
       : [
           `radial-gradient(circle at 10% 0%, ${alpha(visual.primary, 0.18)}, transparent 42%)`,
           `radial-gradient(circle at 100% 100%, ${alpha(visual.secondary, 0.16)}, transparent 36%)`,
-          `linear-gradient(135deg, ${alpha('#1A1308', theme.palette.mode === 'dark' ? 0.9 : 0.2)}, ${alpha('#120F0A', theme.palette.mode === 'dark' ? 0.72 : 0.08)})`,
+          `linear-gradient(135deg, ${alpha(theme.palette.background.default, theme.palette.mode === 'dark' ? 0.9 : 0.2)}, ${alpha(theme.palette.background.default, theme.palette.mode === 'dark' ? 0.72 : 0.08)})`,
         ].join(','),
     boxShadow: [
       `0 0 0 1px ${alpha(visual.border, 0.2)} inset`,

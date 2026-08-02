@@ -38,10 +38,10 @@ const MobileNav = () => {
         // is no inset, so this is a no-op on Android and desktop.
         pb: 'env(safe-area-inset-bottom)',
         borderTop: '1px solid',
-        borderColor: darkMode ? alpha(theme.palette.primary.main, 0.28) : alpha('#0f1a22', 0.14),
-        background: darkMode
-          ? 'linear-gradient(180deg, rgba(12,18,24,0.94), rgba(7,10,14,0.98))'
-          : 'linear-gradient(180deg, rgba(250,252,253,0.96), rgba(229,236,241,0.98))',
+        borderColor: darkMode ? alpha(theme.palette.primary.main, 0.28) : theme.palette.divider,
+        // Paper fading into the page background, in both themes. It used to be two
+        // hand-mixed pairs that only approximated those two surfaces.
+        background: `linear-gradient(180deg, ${alpha(theme.palette.background.paper, 0.94)}, ${alpha(theme.palette.background.default, 0.98)})`,
         backdropFilter: 'blur(8px)',
         boxShadow: darkMode
           ? `0 -8px 18px rgba(0,0,0,0.24), 0 0 12px ${alpha(theme.palette.primary.main, 0.08)}`

@@ -2,6 +2,8 @@ import React, { useMemo } from 'react';
 import { Box, useMediaQuery } from '@mui/material';
 import { alpha, keyframes, useTheme } from '@mui/material/styles';
 
+import { BRAND } from '../utils/palette';
+
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 // How many characters roll past before a drum settles. Enough to read as movement,
@@ -77,13 +79,15 @@ const OdometerWordmark = ({ segments = DEFAULT_SEGMENTS, scale = 1 }) => {
   // Two palettes rather than one with opacity: a real odometer inverts between a lit
   // and an unlit dash, and each needs to clear 4.5:1 on its own. Measured against the
   // mid-drum tone, where the face is brightest and contrast is at its worst —
-  // dark:  #f2f6f8 on #2b333a is 10.9:1, accent #ff8080 on #2b333a is 5.3:1.
-  // light: #14181c on #fbfcfd is 16.4:1, accent #c62828 on #fbfcfd is 5.5:1.
+  // dark:  #f2f6f8 on #2b333a is 10.9:1, accent on #2b333a is 4.5:1.
+  // light: #14181c on #fbfcfd is 16.4:1, accent on #fbfcfd is 5.5:1.
+  // The accent is the brand red, not a wordmark-only one: it used to be #ff8080,
+  // the last fully saturated colour left after the palette was toned down.
   const drumFace = isDark
     ? 'linear-gradient(180deg, #05070a 0%, #131a20 16%, #2b333a 50%, #131a20 84%, #05070a 100%)'
     : 'linear-gradient(180deg, #b9bfc7 0%, #e6eaee 16%, #fbfcfd 50%, #e6eaee 84%, #b9bfc7 100%)';
   const glyphColor = isDark ? '#f2f6f8' : '#14181c';
-  const accentColor = isDark ? '#ff8080' : '#c62828';
+  const accentColor = isDark ? BRAND.dark.red : BRAND.light.red;
 
   return (
     <Box
