@@ -3,10 +3,14 @@ import { useCallback, useState } from 'react';
 /**
  * One-shot location capture, with the failures spelled out.
  *
- * Deliberately not automatic. `navigator.geolocation.getCurrentPosition` shows the
+ * The hook never fires on its own. `navigator.geolocation.getCurrentPosition` shows the
  * browser's own permission prompt the first time it is called, and firing that at
  * someone who opened the dialog to type up a receipt from last week is both useless
- * and slightly alarming. Nothing happens until the button is pressed.
+ * and slightly alarming — dismissed once, the permission stays dismissed.
+ *
+ * LocationField does call `locate` on open for a new record, but only after asking the
+ * Permissions API whether the answer is already 'granted', so opening a form can never
+ * be what raises the prompt. Until then it takes a press.
  *
  * The reasons are separated because they need different answers from the user. A denied
  * permission is fixed in the browser's site settings, an insecure origin cannot be fixed

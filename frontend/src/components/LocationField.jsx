@@ -41,7 +41,7 @@ import { isGeolocationAvailable, useGeolocation, VAGUE_ACCURACY_M } from '../uti
 // account's places arrive most-visited first, so this keeps the ones actually worth
 // offering.
 const SUGGESTION_LIMIT = 6;
-const LocationField = ({ value, onChange, disabled }) => {
+const LocationField = ({ value, onChange, disabled, autoLocate = false }) => {
   const [places, setPlaces] = useState([]);
   const [match, setMatch] = useState(null);
   const [matching, setMatching] = useState(false);
@@ -95,6 +95,39 @@ const LocationField = ({ value, onChange, disabled }) => {
     // lands, not every time the name is edited afterwards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [position, lookup]);
+
+  // Fetch the fix on open, so filing a record where you are is one field shorter.
+  //
+  // Gated on the permission already being granted, which is the difference between
+  // convenience and a prompt nobody asked for. `getCurrentPosition` raises the browser's
+  // own permission dialog on first use; firing that because someone opened a form is
+  // how you get it dismissed, and a dismissal is sticky — after it the button is dead
+  // too, and the feature is worse off than if it had never asked. Until the permission
+  // exists the button is the way in; after that this never asks again.
+  //
+  // Never in edit mode: reopening a record from last week would quietly move it to
+  // where you are standing now. The caller decides, and only passes this for new
+  // records with no location yet.
+  useEffect(() => {
+    if (!autoLocate || !supported || disabled) return;
+    if (value.latitude != null || value.longitude != null) return;
+    if (!navigator.permissions?.query) return;
+
+    let cancelled = false;
+    navigator.permissions
+      .query({ name: 'geolocation' })
+      .then((permission) => {
+        if (!cancelled && permission.state === 'granted') locate();
+      })
+      // Firefox once threw on an unsupported descriptor rather than rejecting the
+      // promise; either way the answer is the same as 'prompt' — leave it to the button.
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+    // Runs once per open. `value` is read for the initial guard only: re-running it as
+    // the coordinates arrive would fight the fix it just asked for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLocate, supported, disabled, locate]);
 
   const handleClear = () => {
     clear();

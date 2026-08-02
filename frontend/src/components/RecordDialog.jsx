@@ -300,6 +300,10 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                 <LocationField
                   value={form}
                   disabled={submitting}
+                  // New records only. An edit reopens a record that already happened
+                  // somewhere else, and silently restamping it with today's position
+                  // would be a data loss you could not see.
+                  autoLocate={!isEdit}
                   onChange={(next) => setForm((prev) => ({ ...prev, ...next }))}
                 />
 
