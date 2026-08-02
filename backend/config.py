@@ -98,3 +98,11 @@ VOLUME_UNITS = {
 	'gal_us': {'label': 'Gallons (US)', 'short': 'gal', 'per_litre': 0.264172},
 	'gal_uk': {'label': 'Gallons (UK)', 'short': 'gal', 'per_litre': 0.219969},
 }
+
+# Which colour palette an account sees. Ids only: the hues, the names shown in
+# settings and the contrast measurements all live in frontend/src/utils/palette.js,
+# and duplicating them here would mean two places to change and one of them wrong.
+# What the server owes is a gate on what can be stored, so a typo cannot become a
+# preference that silently reads back as the default.
+THEME_PALETTES = {'midnight-grove', 'neon-drift', 'sunset-cruise', 'violet-hour', 'chrome-noir'}
+DEFAULT_THEME_PALETTE = 'midnight-grove'

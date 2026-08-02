@@ -7,6 +7,10 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
     theme_mode VARCHAR(10) NOT NULL DEFAULT 'dark' CHECK (theme_mode IN ('dark', 'light')),
+    -- Which set of hues the light and dark modes are built from. No CHECK: the
+    -- palettes are defined in the client and the API validates on write, so a new
+    -- look does not need a migration. See 20260802_000020.
+    theme_palette VARCHAR(40) NOT NULL DEFAULT 'midnight-grove',
     email_verified_at TIMESTAMPTZ,
     last_login_at TIMESTAMPTZ,
     dismissed_alerts JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -399,7 +403,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260731_000019'
+SELECT '20260802_000020'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

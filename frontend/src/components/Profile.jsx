@@ -5,6 +5,7 @@ import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
 import ClimateSettings from './ClimateSettings';
 import FuelComparisonSettings from './FuelComparisonSettings';
+import AppearanceSettings from './AppearanceSettings';
 import { toast } from 'sonner';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -244,6 +245,8 @@ const Profile = () => {
                         </Button>
                     </form>
                 </Paper>
+
+                <AppearanceSettings />
 
                 <UnitSettings />
 

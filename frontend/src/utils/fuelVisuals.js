@@ -11,22 +11,24 @@ const FUEL_VISUALS = {
     primary: FUEL_ACCENT.electric,
     secondary: '#6FD9A8',
     border: '#79BE7F',
-    text: '#D8FFD2',
-    textLight: '#1C7E00',
+    text: '#DCFBE6',
+    textLight: '#0F7346',
   },
   hybrid: {
     primary: FUEL_ACCENT.hybrid,
-    secondary: '#9A93DE',
-    border: '#7AA8D9',
-    text: '#DDF5FF',
-    textLight: '#0071AA',
+    // A hybrid is two drivetrains, so the wash runs from its own blue into the
+    // electric green rather than into the violet it used to carry.
+    secondary: '#7FD1A4',
+    border: '#7AB4E0',
+    text: '#DDF0FF',
+    textLight: '#0F6E9C',
   },
   petrol: {
     primary: FUEL_ACCENT.petrol,
     secondary: '#8B5A2B',
     border: '#BE9A5B',
-    text: '#FFF0CF',
-    textLight: '#995B00',
+    text: '#FFEBD1',
+    textLight: '#A15C00',
   },
   diesel: {
     primary: FUEL_ACCENT.diesel,
@@ -36,11 +38,12 @@ const FUEL_VISUALS = {
     textLight: '#915E16',
   },
   hydrogen: {
+    // Chrome rather than the old teal, which read as a second charging cyan.
     primary: FUEL_ACCENT.hydrogen,
-    secondary: '#5F9EB4',
-    border: '#6BB8AE',
-    text: '#D2FFF9',
-    textLight: '#13786E',
+    secondary: '#8FA8BF',
+    border: '#A8BDD1',
+    text: '#EDF3F9',
+    textLight: '#516878',
   },
 };
 

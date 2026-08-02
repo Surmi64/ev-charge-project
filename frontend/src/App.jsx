@@ -25,7 +25,14 @@ import AdminPage from './components/AdminPage';
 import PasswordRecoveryPage from './components/PasswordRecoveryPage';
 import Billing from './components/Billing';
 import { useAuth } from './context/useAuth';
-import { BRAND, SURFACE, ON_BRAND } from './utils/palette';
+import {
+  DEFAULT_PALETTE,
+  ON_BRAND,
+  SURFACE,
+  isPaletteId,
+  resolveBrand,
+  resolveSeries,
+} from './utils/palette';
 
 
 
@@ -62,23 +69,29 @@ const AdminRoute = ({ children }) => {
 function App() {
   const { token, user, updateUser, loading } = useAuth();
   const [themeMode, setThemeMode] = useState('dark');
+  const [paletteId, setPaletteId] = useState(DEFAULT_PALETTE);
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
 
   const theme = useMemo(() => {
     const darkMode = themeMode === 'dark';
     // Every colour here comes from utils/palette.js. Light-mode brand values are
     // darkened so they clear WCAG AA (4.5:1) both as text on a light surface and as
-    // a button background under the ON_BRAND label ink; the pre-contrast values
-    // (#0F8FA5 / #C3479F / #2F8F59) sat at 3.7:1 / 4.3:1 / 4.0:1.
+    // a button background under the ON_BRAND label ink.
     //
     // warning and error used to fall through to MUI's Material orange and red,
     // which were the only two colours in the app that belonged to no palette.
-    // They are now the brand amber and red, the same hues the charts use.
-    const brand = BRAND[themeMode];
+    // They are now brand roles, the same hues the charts use.
+    //
+    // `brand` and `series` are stamped onto the palette so everything downstream
+    // reads the selected theme off the MUI theme it already has, instead of each
+    // component needing the palette id. utils/palette.js `getBrand`/`getSeries` are
+    // the readers.
+    const brand = resolveBrand(paletteId, themeMode);
+    const series = resolveSeries(paletteId, themeMode);
     const surface = SURFACE[themeMode];
     const onBrand = ON_BRAND[themeMode];
-    const primaryMain = brand.cyan;
-    const secondaryMain = brand.magenta;
+    const primaryMain = brand.primary;
+    const secondaryMain = brand.secondary;
     const backgroundDefault = surface.background;
     const backgroundPaper = surface.paper;
     const lineColor = surface.line;
@@ -97,9 +110,11 @@ function App() {
         mode: themeMode,
         primary: { main: primaryMain },
         secondary: { main: secondaryMain },
-        success: { main: brand.green },
-        warning: { main: brand.amber },
-        error: { main: brand.red },
+        success: { main: brand.success },
+        warning: { main: brand.warning },
+        error: { main: brand.error },
+        brand,
+        series,
         background: {
           default: backgroundDefault,
           paper: backgroundPaper,
@@ -172,9 +187,9 @@ function App() {
         MuiCssBaseline: {
           styleOverrides: {
             body: {
-              // The light wash used to be mixed from #0F8FA5 / #C3479F, the brand
-              // values from before the contrast pass -- close enough to look
-              // deliberate, far enough to be a second light brand.
+              // Both washes read from primaryMain/secondaryMain, so the sunset
+              // corner-glow follows the brand instead of being a second one: the
+              // light wash used to carry its own pre-contrast literals.
               backgroundImage: darkMode
                 ? [
                     `radial-gradient(circle at 10% 0%, ${alpha(primaryMain, 0.14)}, transparent 22%)`,
@@ -365,12 +380,16 @@ function App() {
         },
       },
     });
-  }, [themeMode, prefersReducedMotion]);
+  }, [themeMode, paletteId, prefersReducedMotion]);
 
   useEffect(() => {
     if (user?.theme_mode) {
       setThemeMode(user.theme_mode);
     }
+    // Unknown ids fall back rather than throwing: the column is free text as far as
+    // the client is concerned, and an account that used a palette we later removed
+    // should land on the default instead of a blank screen.
+    setPaletteId(isPaletteId(user?.theme_palette) ? user.theme_palette : DEFAULT_PALETTE);
   }, [user]);
 
   useEffect(() => {
@@ -378,6 +397,15 @@ function App() {
     document.documentElement.style.colorScheme = themeMode;
     document.body.setAttribute('data-theme', themeMode);
   }, [themeMode]);
+
+  // The CSS-side mirror of the brand hues, for the washes in App.css and index.css
+  // that run outside MUI. index.css carries the default palette so the very first
+  // paint is not unstyled; this overrides it once the account's choice is known.
+  useEffect(() => {
+    const brand = resolveBrand(paletteId, themeMode);
+    document.documentElement.style.setProperty('--mileage-primary', brand.primary);
+    document.documentElement.style.setProperty('--mileage-secondary', brand.secondary);
+  }, [paletteId, themeMode]);
 
   const toggleTheme = async () => {
     const newMode = themeMode === 'dark' ? 'light' : 'dark';
