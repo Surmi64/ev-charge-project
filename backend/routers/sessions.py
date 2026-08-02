@@ -64,9 +64,15 @@ def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depend
             cs.battery_level_end,
             cs.odometer,
             cs.notes,
-            cs.latitude,
-            cs.longitude,
-            cs.location_accuracy_m,
+            -- Cast, because these are NUMERIC and psycopg2 hands back Decimal, which
+            -- pydantic serialises as a JSON *string*. The activity feed converts them
+            -- to float in Python (activity.get_activity_rows), so the same coordinate
+            -- arrived as a number there and as a string here -- and the edit dialog,
+            -- which reloads the row from this endpoint, called .toFixed on it and took
+            -- the whole dialog down. Only reproducible on a record that has a location.
+            cs.latitude::float8 AS latitude,
+            cs.longitude::float8 AS longitude,
+            cs.location_accuracy_m::float8 AS location_accuracy_m,
             cs.place_id,
             -- Resolved here rather than left to the client: the edit dialog reloads the
             -- row and would otherwise re-save it with the name blanked out.
