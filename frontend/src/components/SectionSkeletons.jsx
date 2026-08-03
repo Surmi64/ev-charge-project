@@ -181,6 +181,25 @@ export function AnalyticsSkeleton() {
         </Card>
       </Box>
 
+      {/* Providers: two rings side by side. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Skeleton variant="text" width={120} height={30} />
+        <Skeleton variant="text" width="55%" height={20} sx={{ mb: 2 }} />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
+          {[0, 1].map((ring) => (
+            <Box key={ring}>
+              <Skeleton variant="text" width={80} height={22} sx={{ mb: 1 }} />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+                <Skeleton variant="circular" width={168} height={168} sx={{ flexShrink: 0 }} />
+                <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
+                  {[0, 1, 2, 3, 4].map((row) => <Skeleton key={row} variant="text" height={22} />)}
+                </Stack>
+              </Stack>
+            </Box>
+          ))}
+        </Box>
+      </Card>
+
       {/* Single vehicle drilldown. */}
       <Card sx={{ p: 3, borderRadius: 4 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>

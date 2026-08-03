@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getChartColors, getSeriesColor } from '../utils/chartColors';
+import { StackTopBar } from '../utils/chartShapes';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
@@ -127,6 +128,110 @@ const buildMetrics = (fmt) => ({
     format: (v) => fmt.energy(v),
   },
 });
+
+// Five, because that is how many series colours a palette carries — a sixth slice would
+// repeat one and put two identical wedges in the same ring. The long tail of one-off
+// providers goes into a single slice, which is also all it is worth.
+const PROVIDER_SLICES = 5;
+
+/**
+ * Provider rows as pie slices, largest first, by whichever measure the chart is about.
+ *
+ * Two things never merge into the tail: nothing, and the unnamed bucket — that one is
+ * kept separate and greyed, because "I do not know" is not a provider and folding it
+ * into "3 more" would quietly claim it was.
+ */
+const buildProviderSlices = (rows, key, colors, theme) => {
+  const withValue = rows.filter((row) => Number(row[key] || 0) > 0);
+  const named = withValue.filter((row) => row.provider)
+    .sort((a, b) => Number(b[key]) - Number(a[key]));
+  const unnamed = withValue.find((row) => !row.provider);
+
+  const slices = named.slice(0, PROVIDER_SLICES).map((row) => ({
+    key: row.provider,
+    name: row.provider,
+    value: Number(row[key]),
+    rate: row.avg_cost_per_kwh,
+    color: colors.get(row.provider),
+  }));
+
+  const tail = named.slice(PROVIDER_SLICES);
+  if (tail.length) {
+    slices.push({
+      key: '__tail',
+      name: `${tail.length} more`,
+      value: tail.reduce((sum, row) => sum + Number(row[key] || 0), 0),
+      color: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.32 : 0.28),
+    });
+  }
+  if (unnamed) {
+    slices.push({
+      key: '__unnamed',
+      name: 'Unnamed',
+      value: Number(unnamed[key]),
+      color: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.14),
+    });
+  }
+  return slices;
+};
+
+/**
+ * One provider ring with its own legend.
+ *
+ * The legend is a list beside the ring rather than slice labels: provider names run to
+ * "MOL Plugee" and a one-record slice has no room to write it inside.
+ */
+const ProviderPie = ({ title, slices, formatValue, formatRate, empty, chartAnimation, tooltipStyle, theme }) => {
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  return (
+    <Box>
+      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>{title}</Typography>
+      {slices.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">{empty || 'Nothing in this range.'}</Typography>
+      ) : (
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+          <Box sx={{ width: 168, height: 168, flexShrink: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={slices} dataKey="value" nameKey="name"
+                  cx="50%" cy="50%" innerRadius={48} outerRadius={78} paddingAngle={3}
+                  stroke={theme.palette.background.paper} strokeWidth={3}
+                  isAnimationActive={chartAnimation}>
+                  {slices.map((slice) => <Cell key={slice.key} fill={slice.color} />)}
+                </Pie>
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value, name, entry) => {
+                    const rate = formatRate && entry?.payload?.rate != null
+                      ? ` · ${formatRate(entry.payload.rate)}`
+                      : '';
+                    return [`${formatValue(value)}${rate}`, name];
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </Box>
+          <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
+            {slices.map((slice) => (
+              <Stack key={slice.key} direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0, backgroundColor: slice.color }} />
+                  <Typography variant="body2" noWrap
+                    color={slice.key.startsWith('__') ? 'text.secondary' : 'text.primary'}>
+                    {slice.name}
+                  </Typography>
+                </Stack>
+                <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                  {Math.round((slice.value / (total || 1)) * 100)}%
+                </Typography>
+              </Stack>
+            ))}
+          </Stack>
+        </Stack>
+      )}
+    </Box>
+  );
+};
 
 const Figure = ({ label, value, hint, color }) => (
   <Box sx={{ borderLeft: `3px solid ${color}`, pl: 1.5 }}>
@@ -345,6 +450,15 @@ const Analytics = () => {
   const summary = data.summary || {};
   const categories = data.expense_categories || [];
   const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
+  const providers = data.providers || [];
+  // One colour per provider, assigned from the record-count order and reused by both
+  // charts — the same name must not change colour between them, or the pair reads as
+  // two unrelated pictures instead of two views of one.
+  const providerColors = new Map(
+    providers.filter((p) => p.provider).map((p, index) => [p.provider, getSeriesColor(theme, index)]),
+  );
+  const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, theme);
+  const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, theme);
   const hasData = (data.vehicle_stats || []).length > 0;
   const rangeLabel = RANGES.find((r) => r.value === range)?.label.toLowerCase();
 
@@ -471,9 +585,13 @@ const Analytics = () => {
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={trendTooltipLabel}
                     formatter={(value, name) => [huf(value), name]} />
                   <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
+                  {/* Every segment carries the cap and works out whether it is wearing
+                      it, so a month without other costs is rounded like the rest. */}
                   <Bar yAxisId="cost" dataKey="session_cost" name="Driving spend" stackId="cost"
+                    shape={<StackTopBar above={['expense_cost', 'projected_session_cost', 'projected_expense_cost']} />}
                     fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-                  <Bar yAxisId="cost" dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                  <Bar yAxisId="cost" dataKey="expense_cost" name="Other costs" stackId="cost"
+                    shape={<StackTopBar above={['projected_session_cost', 'projected_expense_cost']} />}
                     fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
                   {/* Two separate conditionals rather than one fragment: Recharts
                       builds its series by walking its direct children and does not
@@ -481,11 +599,13 @@ const Analytics = () => {
                       the first two bars' colour and legend name. */}
                   {projectionOn ? (
                     <Bar yAxisId="cost" dataKey="projected_session_cost" name="Projected driving" stackId="cost"
+                      shape={<StackTopBar above={['projected_expense_cost']} />}
                       fill="url(#projectedDriving)" stroke={alpha(theme.palette.primary.main, isLight ? 0.9 : 0.6)} strokeDasharray="4 3"
                       isAnimationActive={chartAnimation} />
                   ) : null}
                   {projectionOn ? (
-                    <Bar yAxisId="cost" dataKey="projected_expense_cost" name="Projected other" stackId="cost" radius={[8, 8, 0, 0]}
+                    <Bar yAxisId="cost" dataKey="projected_expense_cost" name="Projected other" stackId="cost"
+                      shape={<StackTopBar />}
                       fill="url(#projectedOther)" stroke={alpha(theme.palette.secondary.main, isLight ? 0.9 : 0.6)} strokeDasharray="4 3"
                       isAnimationActive={chartAnimation} />
                   ) : null}
@@ -711,6 +831,34 @@ const Analytics = () => {
             </Card>
           </Box>
 
+          {/* Who you buy energy from. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Providers</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              How often you stop where, and how much energy you take there. Named from
+              the record's location, or from what the record itself says.
+            </Typography>
+            {providers.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No charging or fuel records in this range.
+              </Typography>
+            ) : (
+              // Two rings rather than one: how often you stop somewhere and how much you
+              // take on each stop are different questions, and the gap between them is
+              // the point — a home charger is a handful of long sessions, a motorway
+              // stop the reverse.
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
+                <ProviderPie title="Stops" slices={stopsSlices} chartAnimation={chartAnimation}
+                  tooltipStyle={tooltipStyle} theme={theme}
+                  formatValue={(value) => `${value} record${value === 1 ? '' : 's'}`} />
+                <ProviderPie title="Energy" slices={energySlices} chartAnimation={chartAnimation}
+                  tooltipStyle={tooltipStyle} theme={theme}
+                  formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
+                  empty="No charging with a recorded kWh figure in this range." />
+              </Box>
+            )}
+          </Card>
+
           {/* Per-vehicle detail. */}
           <Card sx={{ p: 3, borderRadius: 4 }}>
             <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between"
@@ -753,8 +901,10 @@ const Analytics = () => {
                         formatter={(value, name) => [huf(value), name]} />
                       <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
                       <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
+                        shape={<StackTopBar above={['expense_cost']} />}
                         fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-                      <Bar dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+                      <Bar dataKey="expense_cost" name="Other costs" stackId="cost"
+                        shape={<StackTopBar />}
                         fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
                     </ComposedChart>
                   </ResponsiveContainer>

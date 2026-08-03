@@ -9,6 +9,7 @@ try:
     from backend.db import column_exists, get_db
     from backend.forecast import build_forecast
     from backend.fuel_comparison import annotate_trend, resolve_basis
+    from backend.providers import aggregate_providers
     from backend.routers.vehicles import has_archive_support
 except ModuleNotFoundError:
     from activity import get_activity_feed
@@ -17,6 +18,7 @@ except ModuleNotFoundError:
     from db import column_exists, get_db
     from forecast import build_forecast
     from fuel_comparison import annotate_trend, resolve_basis
+    from providers import aggregate_providers
     from routers.vehicles import has_archive_support
 
 router = APIRouter(tags=['insights'])
@@ -604,12 +606,15 @@ def get_analytics_summary(
     expense_params: list[object] = [user_id]
     avg_filters = ['user_id = %s', "event_type = 'charging'", 'energy_kwh IS NOT NULL', 'energy_kwh > 0']
     avg_params: list[object] = [user_id]
+    provider_filters = ['user_id = %s', "event_type IN ('charging', 'fueling')"]
+    provider_params: list[object] = [user_id]
 
     if active_events:
         weekly_filters.append(active_events)
         event_filters.append(active_events)
         expense_filters.append(active_events)
         avg_filters.append(active_events)
+        provider_filters.append(active_events)
         # join_filters needs nothing: odometer_stats drives off `vehicles`, which
         # active_vehicles already narrows to the live fleet.
 
@@ -620,11 +625,13 @@ def get_analytics_summary(
         join_filters.append('ve.occurred_at >= %s')
         expense_filters.append('occurred_at >= %s')
         avg_filters.append('occurred_at >= %s')
+        provider_filters.append('occurred_at >= %s')
         weekly_params.append(start_value)
         event_params.append(start_value)
         join_params.append(start_value)
         expense_params.append(start_value)
         avg_params.append(start_value)
+        provider_params.append(start_value)
 
     if end_date is not None:
         end_value = end_date.isoformat()
@@ -633,11 +640,13 @@ def get_analytics_summary(
         join_filters.append('ve.occurred_at < %s')
         expense_filters.append('occurred_at < %s')
         avg_filters.append('occurred_at < %s')
+        provider_filters.append('occurred_at < %s')
         weekly_params.append(end_value)
         event_params.append(end_value)
         join_params.append(end_value)
         expense_params.append(end_value)
         avg_params.append(end_value)
+        provider_params.append(end_value)
 
     cur.execute(
         f"""
@@ -731,6 +740,21 @@ def get_analytics_summary(
     )
     avg_row = cur.fetchone() or {}
 
+    # Who you actually buy energy from. The provider is not a column -- it is derived
+    # per row from the place, the source and the note, so the rows come back raw and
+    # backend/providers.py does the grouping. Narrow projection: this is the same range
+    # the aggregates above already scanned, minus every column that does not name a
+    # provider or add up.
+    cur.execute(
+        f"""
+        SELECT place_name, source, notes, event_type, energy_kwh, fuel_liters, total_cost
+        FROM vehicle_events
+        WHERE {' AND '.join(provider_filters)};
+        """,
+        provider_params,
+    )
+    providers = aggregate_providers(cur.fetchall())
+
     serialized_vehicle_stats = [
         {
             'id': row['id'],
@@ -765,6 +789,7 @@ def get_analytics_summary(
         'trend': trend,
         'fuel_comparison': comparison,
         'vehicle_stats': serialized_vehicle_stats,
+        'providers': providers,
         'expense_categories': [
             {
                 'category': row['category'],
