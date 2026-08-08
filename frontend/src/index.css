@@ -3,8 +3,13 @@
    washes in App.css. The values had drifted a shade or two from the theme
    (#e7edf1 against #EEF3F6, one-off panel alphas), which showed as a seam where a
    CSS-painted surface met a MUI one. Change a colour here and in palette.js
-   together -- and note --mileage-cyan/--mileage-magenta are per theme, so nothing
-   in CSS paints a dark neon onto the light surface. */
+   together -- and note --mileage-primary/--mileage-secondary are per mode, so nothing
+   in CSS paints a dark hue onto the light surface.
+
+   Those two are also per *palette*, and the account's choice is only known after
+   the user loads: App.jsx sets them inline on <html>, which outranks both blocks
+   below. What is written here is the default palette, so the first paint is styled
+   rather than colourless. */
 :root {
   color-scheme: dark;
   --mileage-bg: #070b0f;
@@ -13,8 +18,8 @@
   --mileage-steel: #9fb2c3;
   --mileage-text: #edf7ff;
   --mileage-muted: rgba(228, 236, 243, 0.68);
-  --mileage-cyan: #5fc9d6;
-  --mileage-magenta: #d983c4;
+  --mileage-primary: #5aa9ff;
+  --mileage-secondary: #3fd6a0;
   --mileage-line: rgba(185, 214, 231, 0.12);
   --mileage-grid: rgba(255, 255, 255, 0.03);
   --mileage-kicker: rgba(198, 226, 231, 0.86);
@@ -29,12 +34,12 @@
   --mileage-steel: #5f7283;
   --mileage-text: #0b141a;
   --mileage-muted: rgba(36, 51, 63, 0.74);
-  --mileage-cyan: #0a6f80;
-  --mileage-magenta: #a32f80;
+  --mileage-primary: #0b5fbf;
+  --mileage-secondary: #08715c;
   --mileage-line: rgba(31, 51, 64, 0.12);
   --mileage-grid: rgba(17, 26, 34, 0.05);
   /* Full strength: at 0.92 the kicker measured 4.48:1, a hair under AA. */
-  --mileage-kicker: #0a6f80;
+  --mileage-kicker: var(--mileage-primary);
   --mileage-subtitle: rgba(33, 46, 58, 0.78);
 }
 
@@ -76,7 +81,7 @@ a {
   top: -6rem;
   z-index: 2000;
   padding: 0.7rem 1.1rem;
-  border: 1px solid var(--mileage-cyan);
+  border: 1px solid var(--mileage-primary);
   border-radius: 6px;
   background: var(--mileage-panel-strong);
   color: var(--mileage-text);
@@ -123,6 +128,6 @@ body {
 /* Was a fixed cyan wash under near-white ink, which in light mode put #f8ffff on a
    pale tint. Both sides follow the theme now. */
 ::selection {
-  background: color-mix(in srgb, var(--mileage-cyan) 30%, transparent);
+  background: color-mix(in srgb, var(--mileage-primary) 30%, transparent);
   color: var(--mileage-text);
 }

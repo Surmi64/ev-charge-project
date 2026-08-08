@@ -40,6 +40,7 @@ import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { createFormatters } from '../utils/units';
+import { StackTopBar } from '../utils/chartShapes';
 import { DashboardSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
 
@@ -333,8 +334,10 @@ const Dashboard = () => {
               />
               <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
               <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
+                shape={<StackTopBar above={['expense_cost']} />}
                 fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-              <Bar dataKey="expense_cost" name="Other costs" stackId="cost" radius={[8, 8, 0, 0]}
+              <Bar dataKey="expense_cost" name="Other costs" stackId="cost"
+                shape={<StackTopBar />}
                 fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
             </BarChart>
           </ResponsiveContainer>

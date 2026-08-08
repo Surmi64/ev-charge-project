@@ -17,7 +17,7 @@ try:
         validate_password_strength,
     )
     from backend.climate import ZONES as CLIMATE_ZONES, zone_options
-    from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
     from backend.site_settings import get_site_settings
     from backend.schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
@@ -25,7 +25,7 @@ except ModuleNotFoundError:
     from auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
     from climate import ZONES as CLIMATE_ZONES, zone_options
     from auth_utils import create_access_token, create_refresh_token, get_current_user_id, hash_token, pwd_context, validate_password_strength
-    from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DISTANCE_UNITS, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
     from site_settings import get_site_settings
     from schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
@@ -97,6 +97,8 @@ def load_user_profile(db, user_id) -> dict | None:
     columns = ['id', 'username', 'email', 'role', 'created_at']
     if column_exists(db, 'users', 'theme_mode'):
         columns.append('theme_mode')
+    if column_exists(db, 'users', 'theme_palette'):
+        columns.append('theme_palette')
     if column_exists(db, 'users', 'dismissed_alerts'):
         columns.append('dismissed_alerts')
     for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone',
@@ -111,6 +113,7 @@ def load_user_profile(db, user_id) -> dict | None:
         return None
 
     user.setdefault('theme_mode', 'dark')
+    user.setdefault('theme_palette', DEFAULT_THEME_PALETTE)
     user.setdefault('role', 'user')
     user.setdefault('dismissed_alerts', [])
     user.setdefault('currency', 'EUR')
@@ -446,6 +449,7 @@ def update_profile(
     current_password: str | None = Body(None),
     new_password: str | None = Body(None),
     theme_mode: str | None = Body(None),
+    theme_palette: str | None = Body(None),
     dismissed_alerts: list[str] | None = Body(None),
     currency: str | None = Body(None),
     distance_unit: str | None = Body(None),
@@ -487,6 +491,15 @@ def update_profile(
     if theme_mode and column_exists(db, 'users', 'theme_mode'):
         updates.append('theme_mode = %s')
         values.append(theme_mode)
+
+    # Rejected rather than stored as given: the client falls back to the default when
+    # it reads an id it does not know, so an accepted typo would look like the setting
+    # silently refusing to take.
+    if theme_palette and column_exists(db, 'users', 'theme_palette'):
+        if theme_palette not in THEME_PALETTES:
+            raise HTTPException(status_code=400, detail=f'Unknown theme palette: {theme_palette}')
+        updates.append('theme_palette = %s')
+        values.append(theme_palette)
 
     # A full replace rather than an append: the client sends the pruned list, so ids
     # for situations that no longer exist drop out instead of accumulating forever.
@@ -563,6 +576,8 @@ def update_profile(
             changed_fields.append('password')
         if theme_mode and column_exists(db, 'users', 'theme_mode'):
             changed_fields.append('theme_mode')
+        if theme_palette and column_exists(db, 'users', 'theme_palette'):
+            changed_fields.append('theme_palette')
         if dismissed_alerts is not None and column_exists(db, 'users', 'dismissed_alerts'):
             changed_fields.append('dismissed_alerts')
         for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit), ('climate_zone', climate_zone),

@@ -293,8 +293,13 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
                 <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   <TextField label={`Odometer (${fmt.distanceShort})`} type="number" fullWidth
                     value={form.odometer} onChange={set('odometer')} helperText="Optional" />
+                  {/* The provider comes from the location below — it names the place
+                      once and every record filed there inherits it. This stays for the
+                      records filed without a fix, and for anything the place name does
+                      not cover. */}
                   <TextField label="Source" fullWidth
-                    value={form.source} onChange={set('source')} helperText="Home, Ionity, MOL…" />
+                    value={form.source} onChange={set('source')}
+                    helperText="Optional — the location names the provider" />
                 </Stack>
 
                 <LocationField

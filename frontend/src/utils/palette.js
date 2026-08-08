@@ -1,54 +1,167 @@
 // The app's entire colour vocabulary, in one place.
 //
-// Five hues per theme carry everything: the MUI palette (primary, secondary,
-// success, warning, error), the categorical chart series, and the accent hues in
-// categoryVisuals and fuelVisuals. They were separate literals in five files and
-// had already drifted -- the light body gradient still painted the pre-contrast
-// brand values, and the light success green differed from the light chart green
-// for no reason.
+// Three layers, and the distinction between them is the whole design:
 //
-// The two sets keep the same hue order, so a series does not change identity when
-// the user toggles the theme. Contrast is measured against the composited paper
-// surface (#0B1116 dark, #FBFCFD light); every value below clears 4.5:1 as text
-// there, which also covers the 3:1 floor for chart marks and borders.
-// The dark hues were fully saturated (HSL S=100%) -- pure cyan, pure magenta, pure
-// spring green. On a near-black surface that is glare rather than accent, and it
-// left no headroom: everything was already at maximum, so nothing could stand out
-// from anything else. They are the same hues at roughly half saturation now, which
-// keeps the synthwave read (teal and orchid over near-black, gradient buttons,
-// coloured glows) without the buzz.
-export const BRAND = {
+//   HUES     -- the verified pigments. Nothing outside this file invents a hex.
+//   PALETTES -- which pigments a named theme points at primary and secondary.
+//   ROLE_*   -- success, warning, error and neutral, the same in every palette.
+//
+// Contrast is measured against the composited paper surface (#0B1116 dark,
+// #FBFCFD light); every value below clears 4.5:1 as text on its own surface *and*
+// under the ON_BRAND label ink when it is used as a button fill, which also covers
+// the 3:1 floor for chart marks and borders. Adding a hue means measuring it both
+// ways -- a value that only clears one of the two is the failure mode this table
+// exists to prevent.
+//
+// The palette used to be built on cyan and magenta, which is the obvious synthwave
+// pairing and also the loudest: two hues the eye has no natural referent for,
+// vibrating against each other at full strength. Desaturating them only made them
+// dull rather than calm. The fix was the hue wheel, not the saturation slider --
+// blue, gold, green, red and chrome are colours with real-world anchors, so they
+// carry the same neon-over-near-black gradients and glows without the buzz.
+// Saturation is back up where it belongs: the sidebar's destructive items and the
+// wordmark accent read as red again instead of dusty pink.
+//
+// The two modes keep the same key names, so a series does not change identity when
+// the user toggles between them.
+export const HUES = {
   dark: {
-    cyan: '#5FC9D6',    //  9.8:1, S 59%
-    magenta: '#D983C4', //  7.2:1, S 53%
-    green: '#8FD98A',   // 11.3:1, S 51%
-    amber: '#DFA85E',   //  9.0:1, S 67%
-    violet: '#A98FE0',  //  7.0:1, S 57%
-    red: '#DB8080',     //  6.7:1, S 56%
+    blue: '#5AA9FF',    //  7.7:1
+    violet: '#A98FE0',  //  7.0:1
+    emerald: '#3FD6A0', // 10.3:1
+    green: '#5FD98D',   // 10.7:1
+    lime: '#BCD97A',    // 12.1:1
+    gold: '#F2CE5B',    // 12.4:1
+    orange: '#F0A05B',  //  8.9:1
+    coral: '#FF9A6B',   //  9.1:1
+    red: '#FF7A7A',     //  7.5:1
+    silver: '#CDDCEA',  // 13.6:1
+    steel: '#9FB6CC',   //  9.1:1
   },
   light: {
-    cyan: '#0A6F80',    //  5.7:1
-    magenta: '#A32F80', //  6.2:1
-    green: '#1F6B41',   //  6.3:1
-    amber: '#B45309',   //  4.9:1
+    blue: '#0B5FBF',    //  6.0:1
     violet: '#6A2BA8',  //  8.1:1
+    emerald: '#08715C', //  5.8:1
+    green: '#0F7346',   //  5.7:1
+    lime: '#4F7A0E',    //  5.0:1
+    gold: '#8A6100',    //  5.4:1
+    orange: '#B45309',  //  4.9:1
+    coral: '#B33C10',   //  5.7:1
     red: '#C62828',     //  5.5:1
+    silver: '#42586B',  //  7.2:1
+    steel: '#3F5666',   //  7.5:1
   },
 };
 
-// Identity hue per fuel type. Kept out of BRAND because these are not theme
-// variants of each other -- they are five distinct things a vehicle can be -- but
-// kept here because both fuelVisuals and categoryVisuals key off them, and the
-// `fueling` category is the petrol hue by definition rather than by coincidence.
-// Electric borrows the brand green so a charging session reads as one colour
-// across the chip, the card and the chart.
-// Desaturated alongside BRAND, for the same reason.
+// The semantic roles do not vary by palette. Green means good and red means gone
+// in every theme -- a palette that recoloured those would be asking the user to
+// relearn the interface, which is not what picking a look is for. Only `primary`,
+// `secondary` and the chart series change.
+const ROLE_HUES = {
+  success: 'green',
+  warning: 'orange',
+  error: 'red',
+  neutral: 'silver',
+};
+
+// `series` is written out per palette rather than derived from the roles, because
+// separation between adjacent slices is a property of the whole set: gold beside
+// orange reads as one wedge no matter how well each performs alone. Five entries,
+// which is what Analytics asks for before it wraps.
+export const PALETTES = {
+  'midnight-grove': {
+    name: 'Midnight Grove',
+    description: 'Deep blue into emerald. The default, and the calmest.',
+    primary: 'blue',
+    secondary: 'emerald',
+    series: ['blue', 'emerald', 'gold', 'coral', 'silver'],
+  },
+  'neon-drift': {
+    name: 'Neon Drift',
+    description: 'Electric blue into gold, headlights on an empty motorway.',
+    primary: 'blue',
+    secondary: 'gold',
+    series: ['blue', 'gold', 'green', 'red', 'silver'],
+  },
+  'sunset-cruise': {
+    name: 'Sunset Cruise',
+    description: 'Coral into amber. The warm end of the synthwave horizon.',
+    primary: 'coral',
+    secondary: 'gold',
+    series: ['coral', 'gold', 'emerald', 'violet', 'silver'],
+  },
+  'violet-hour': {
+    name: 'Violet Hour',
+    description: 'Orchid over blue, the sky ten minutes after the sun goes.',
+    primary: 'violet',
+    secondary: 'blue',
+    series: ['violet', 'blue', 'emerald', 'gold', 'silver'],
+  },
+  'chrome-noir': {
+    name: 'Chrome Noir',
+    description: 'Brushed steel and one blue. For when the data should shout, not the frame.',
+    primary: 'steel',
+    secondary: 'blue',
+    series: ['steel', 'blue', 'gold', 'coral', 'green'],
+  },
+};
+
+export const DEFAULT_PALETTE = 'midnight-grove';
+
+export const PALETTE_IDS = Object.keys(PALETTES);
+
+export const isPaletteId = (id) => Object.prototype.hasOwnProperty.call(PALETTES, id);
+
+const resolvePaletteId = (id) => (isPaletteId(id) ? id : DEFAULT_PALETTE);
+
+/** The six brand colours for one palette in one mode, as hex. */
+export function resolveBrand(paletteId, mode) {
+  const palette = PALETTES[resolvePaletteId(paletteId)];
+  const hues = HUES[mode] || HUES.dark;
+  return {
+    primary: hues[palette.primary],
+    secondary: hues[palette.secondary],
+    success: hues[ROLE_HUES.success],
+    warning: hues[ROLE_HUES.warning],
+    error: hues[ROLE_HUES.error],
+    neutral: hues[ROLE_HUES.neutral],
+  };
+}
+
+/** The five categorical chart colours for one palette in one mode, as hex. */
+export function resolveSeries(paletteId, mode) {
+  const palette = PALETTES[resolvePaletteId(paletteId)];
+  const hues = HUES[mode] || HUES.dark;
+  return palette.series.map((hue) => hues[hue]);
+}
+
+/**
+ * Swatches for the palette picker: primary, secondary and two series entries that
+ * are not already one of those, so a card shows the range rather than repeating
+ * itself.
+ */
+export function getPaletteSwatches(paletteId, mode) {
+  const brand = resolveBrand(paletteId, mode);
+  const extras = resolveSeries(paletteId, mode)
+    .filter((hex) => hex !== brand.primary && hex !== brand.secondary)
+    .slice(0, 2);
+  return [brand.primary, brand.secondary, ...extras];
+}
+
+// Identity hue per fuel type. Deliberately outside the palettes: these are not a
+// look, they are what a vehicle *is*, and an account that recoloured its theme and
+// found its diesel cars had turned green would have lost information rather than
+// changed a preference. Same reason the expense categories in categoryVisuals hold
+// fixed hues. Both read from HUES so they stay in the measured set.
+// `fueling` is the petrol hue by definition rather than by coincidence, and
+// electric borrows the green so a charging session reads as one colour across the
+// chip, the card and the chart.
 export const FUEL_ACCENT = {
-  electric: BRAND.dark.green,
-  hybrid: '#7AB6DE',
-  petrol: '#DFAE6B',
-  diesel: '#C9A173',
-  hydrogen: '#6CC9BE',
+  electric: HUES.dark.green,
+  hybrid: '#8FD0F0',
+  petrol: '#F0A85B',
+  diesel: '#D9B283',
+  hydrogen: HUES.dark.silver,
 };
 
 // Neutrals. These are duplicated in index.css as --mileage-* custom properties for
@@ -82,16 +195,25 @@ export const SURFACE = {
 };
 
 // Ink for filled buttons and other solid brand fills. Measured against every hue
-// above: the worst pairing is #F7FBFC on light amber at 4.8:1.
+// above: the worst pairing is #F7FBFC on light orange at 4.8:1.
 export const ON_BRAND = { dark: '#061015', light: '#F7FBFC' };
 
-export const getBrand = (theme) => BRAND[theme.palette.mode];
+// App.jsx stamps the resolved palette onto the MUI theme, so anything holding a
+// theme can read the brand without also knowing which palette is selected. The
+// fallback covers a component rendered under a bare createTheme() -- there is no
+// such call today, but returning undefined here would surface as a blank fill
+// somewhere far from the cause.
+export const getBrand = (theme) =>
+  theme.palette.brand || resolveBrand(DEFAULT_PALETTE, theme.palette.mode);
+
+export const getSeries = (theme) =>
+  theme.palette.series || resolveSeries(DEFAULT_PALETTE, theme.palette.mode);
 
 export const getSurface = (theme) => SURFACE[theme.palette.mode];
 
 export const getOnBrand = (theme) => ON_BRAND[theme.palette.mode];
 
-// Offered as the default when a vehicle has no colour of its own. Dark-mode cyan
-// rather than a mode-dependent value, because it is persisted per vehicle and has
-// to mean the same thing after a theme toggle.
-export const DEFAULT_VEHICLE_COLOR = BRAND.dark.cyan;
+// Offered as the default when a vehicle has no colour of its own. A fixed hue
+// rather than one that follows the mode or the selected palette, because it is
+// persisted per vehicle and has to mean the same thing afterwards.
+export const DEFAULT_VEHICLE_COLOR = HUES.dark.blue;

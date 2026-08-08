@@ -1,6 +1,6 @@
 import { alpha } from '@mui/material/styles';
 
-import { BRAND, FUEL_ACCENT } from './palette';
+import { FUEL_ACCENT, HUES } from './palette';
 
 // `color` is the hue used for borders and glows in both themes.
 // `text` is the label colour, and it has to differ per theme: the light tints below
@@ -8,16 +8,16 @@ import { BRAND, FUEL_ACCENT } from './palette';
 // background in light mode. `textLight` keeps the same hue but is darkened until it
 // clears 4.5:1 there.
 export const CATEGORY_VISUALS = {
-  charging: { color: BRAND.dark.cyan, text: '#CFFBFF', textLight: '#007F85' },
-  fueling: { color: FUEL_ACCENT.petrol, text: '#FFF0CF', textLight: '#A86400' },
-  maintenance: { color: BRAND.dark.green, text: '#E2FFD9', textLight: '#1E8900' },
-  insurance: { color: '#79B4D9', text: '#E0F4FF', textLight: '#007AC6' },
-  parking: { color: '#A48BD9', text: '#E9E1FF', textLight: '#7B5BD1' },
-  toll: { color: '#D9866B', text: '#FFE2D7', textLight: '#D53D00' },
-  tax: { color: '#D9BE6B', text: '#FFF5C4', textLight: '#937100' },
-  inspection: { color: '#7FCFB4', text: '#DFFFF2', textLight: '#0D855C' },
-  cleaning: { color: '#B4CE7A', text: '#F4FFD0', textLight: '#597E09' },
-  other: { color: '#B9C6D1', text: '#EEF3F7', textLight: '#5E788E' },
+  charging: { color: HUES.dark.blue, text: '#D6E8FF', textLight: '#0B5FBF' },
+  fueling: { color: FUEL_ACCENT.petrol, text: '#FFEBD1', textLight: '#A15C00' },
+  maintenance: { color: HUES.dark.green, text: '#DCFBE6', textLight: '#137A48' },
+  insurance: { color: '#7FC4E8', text: '#DFF2FF', textLight: '#0F6E9C' },
+  parking: { color: '#C3B7E0', text: '#ECE6FA', textLight: '#5B4B99' },
+  toll: { color: '#F08A6B', text: '#FFE0D6', textLight: '#B33C10' },
+  tax: { color: HUES.dark.gold, text: '#FFF3C9', textLight: '#7E6100' },
+  inspection: { color: '#7FD9C4', text: '#DDFBF2', textLight: '#0B7A62' },
+  cleaning: { color: '#BCD97A', text: '#F1FBD6', textLight: '#4F7A0E' },
+  other: { color: HUES.dark.silver, text: '#EEF3F7', textLight: '#516878' },
 };
 
 export function getCategoryVisual(category) {
