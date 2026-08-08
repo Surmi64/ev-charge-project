@@ -181,7 +181,7 @@ const buildProviderSlices = (rows, key, colors, theme) => {
  * The legend is a list beside the ring rather than slice labels: provider names run to
  * "MOL Plugee" and a one-record slice has no room to write it inside.
  */
-const ProviderPie = ({ title, slices, formatValue, formatRate, empty, chartAnimation, tooltipStyle, theme }) => {
+const ProviderPie = ({ title, slices, formatValue, formatRate, empty, chartAnimation, tooltipStyle, itemStyle, theme }) => {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0);
   return (
     <Box>
@@ -201,6 +201,7 @@ const ProviderPie = ({ title, slices, formatValue, formatRate, empty, chartAnima
                 </Pie>
                 <Tooltip
                   contentStyle={tooltipStyle}
+                  itemStyle={itemStyle}
                   formatter={(value, name, entry) => {
                     const rate = formatRate && entry?.payload?.rate != null
                       ? ` · ${formatRate(entry.payload.rate)}`
@@ -421,6 +422,12 @@ const Analytics = () => {
     backgroundColor: theme.palette.background.paper,
     border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
   };
+
+  // Pie tooltips only. Recharts colours an item's text from the series colour, which a
+  // Bar or a Line carries — a Pie does not, and the entry falls back to black: unreadable
+  // on the dark panel, and near enough on the light one. Bars and lines keep their own
+  // colour here, since it is what ties the row to the mark it came from.
+  const tooltipItemStyle = { color: theme.palette.text.primary };
 
   const rangeSelector = (
     <ToggleButtonGroup exclusive size="small" value={range}
@@ -807,8 +814,11 @@ const Analytics = () => {
                             <Cell key={entry.category} fill={COLORS[index % COLORS.length]} />
                           ))}
                         </Pie>
-                        <Tooltip contentStyle={tooltipStyle} formatter={(value) => huf(value)}
-                          labelFormatter={formatCategoryLabel} />
+                        {/* The name is formatted in the formatter, not in labelFormatter:
+                            a pie tooltip has no label, so that one never ran and the row
+                            read "insurance" while the legend beside it read "Insurance". */}
+                        <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle}
+                          formatter={(value, name) => [huf(value), formatCategoryLabel(name)]} />
                       </PieChart>
                     </ResponsiveContainer>
                   </Box>
@@ -849,10 +859,10 @@ const Analytics = () => {
               // stop the reverse.
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
                 <ProviderPie title="Stops" slices={stopsSlices} chartAnimation={chartAnimation}
-                  tooltipStyle={tooltipStyle} theme={theme}
+                  tooltipStyle={tooltipStyle} itemStyle={tooltipItemStyle} theme={theme}
                   formatValue={(value) => `${value} record${value === 1 ? '' : 's'}`} />
                 <ProviderPie title="Energy" slices={energySlices} chartAnimation={chartAnimation}
-                  tooltipStyle={tooltipStyle} theme={theme}
+                  tooltipStyle={tooltipStyle} itemStyle={tooltipItemStyle} theme={theme}
                   formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
                   empty="No charging with a recorded kWh figure in this range." />
               </Box>

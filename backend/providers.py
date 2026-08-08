@@ -17,6 +17,18 @@ trusted:
 
 A record none of those name is left unnamed rather than guessed at. Grouping the
 history under a wrong operator is worse than admitting the history predates the field.
+
+The operator is not read off the front of the string, because the two ways of naming a
+site disagree about word order: the imported notes lead with the operator ("Tesla
+Debrecen Auchan DC 150"), while a place named through the location field tends to lead
+with the town ("Debrecen Tesla Auchan"). Taking the first word would file those as two
+providers and make the location field the worse way to record a stop, which is exactly
+backwards -- it is the only one nobody has to type.
+
+So the vocabulary comes first: every site-shaped string in the account's own history
+contributes its operator, and that vocabulary is then matched anywhere inside a name.
+Nothing is invented, and an account that never used the old app simply groups by the
+place names it chose.
 """
 
 import re
@@ -42,6 +54,64 @@ def _is_provenance(value: str) -> bool:
     return lowered in PROVENANCE_SOURCES or lowered.startswith(PROVENANCE_PREFIXES)
 
 
+def _words(text: str) -> list[str]:
+    """Lowercased word tokens. Accents survive: \\w is unicode-aware here."""
+    return [word for word in re.split(r'\W+', (text or '').lower(), flags=re.UNICODE) if word]
+
+
+def collect_operators(rows) -> list[str]:
+    """The account's own operator vocabulary, learned from its site-shaped strings.
+
+    Only site-shaped text teaches: "TEA Abony DC 130 kW" is unambiguously a charger
+    description, so its first word is unambiguously an operator. A place called "Home"
+    teaches nothing and must not become a name to match other places against.
+
+    Ordered longest first, so "MOL Plugee" is tried before "MOL" and wins the match --
+    they are different businesses and the fuel brand must not swallow the charger one.
+    """
+    counts: Counter = Counter()
+    for row in rows:
+        for text in (row.get('place_name'), row.get('source'), row.get('notes')):
+            value = (text or '').strip()
+            if not value or _is_provenance(value) or not SITE_SHAPE.search(value):
+                continue
+            label = provider_label(value)
+            if label:
+                counts[label] += 1
+
+    # One entry per operator, spelled the way it appears most often — "Evse" and "EVSE"
+    # are the same company and must not be two rows.
+    canonical: dict[str, Counter] = {}
+    for label, count in counts.items():
+        canonical.setdefault(label.lower(), Counter())[label] += count
+    for name in MULTI_WORD_OPERATORS:
+        canonical.setdefault(name.lower(), Counter())[name] += 0
+
+    names = [
+        min(spellings, key=lambda spelling: (-spellings[spelling], len(spelling)))
+        for spellings in canonical.values()
+    ]
+    return sorted(names, key=lambda name: (-len(_words(name)), -len(name), name.lower()))
+
+
+def match_operator(text: str, operators) -> str:
+    """The first known operator appearing anywhere in `text`, as a whole word run.
+
+    Word runs rather than substrings: "Teatro" is not TEA, and "Homer" is not Home.
+    """
+    words = _words(text)
+    if not words:
+        return ''
+    for name in operators:
+        target = _words(name)
+        if not target:
+            continue
+        for start in range(len(words) - len(target) + 1):
+            if words[start:start + len(target)] == target:
+                return name
+    return ''
+
+
 def provider_label(text: str) -> str:
     """The operator behind a site description, or the text itself if it is not one.
 
@@ -61,35 +131,47 @@ def provider_label(text: str) -> str:
     return value
 
 
-def derive_provider(place_name=None, source=None, notes=None) -> str:
-    """The provider for one record, or '' when nothing names it."""
-    place = provider_label(place_name)
-    if place:
-        return place
+def derive_provider(place_name=None, source=None, notes=None, operators=()) -> str:
+    """The provider for one record, or '' when nothing names it.
 
+    A known operator found anywhere beats the field order: a place called "Debrecen
+    Tesla Auchan" is a Tesla stop however it is written. Only when the vocabulary has
+    nothing to say does the most trusted field get read on its own terms.
+    """
+    candidates = []
+    place = (place_name or '').strip()
+    if place:
+        candidates.append(place)
     cleaned_source = (source or '').strip()
     if cleaned_source and not _is_provenance(cleaned_source):
-        return provider_label(cleaned_source)
-
+        candidates.append(cleaned_source)
     note = (notes or '').strip()
     if note and SITE_SHAPE.search(note):
-        return provider_label(note)
+        candidates.append(note)
 
-    return ''
+    for text in candidates:
+        matched = match_operator(text, operators)
+        if matched:
+            return matched
+
+    return provider_label(candidates[0]) if candidates else ''
 
 
-def aggregate_providers(rows) -> list[dict]:
+def aggregate_providers(rows, operators=None) -> list[dict]:
     """Roll charging and fueling events up per provider.
 
-    Aggregated here rather than in SQL because the derivation above is three fallbacks
-    and a regex, and Postgres would need all of it inlined twice — once to select the
-    label and once to group by it. The input is one narrow scan of the range the page
-    is already reading.
+    The vocabulary has to be known before any row can be labelled, which is the reason
+    this is not SQL. Pass `operators` built from the account's whole history: derived
+    from the visible rows instead, a place would change which provider it belongs to
+    when the range narrowed past the records that taught the name.
     """
+    rows = list(rows)
+    if operators is None:
+        operators = collect_operators(rows)
     buckets: dict[str, dict] = {}
 
     for row in rows:
-        label = derive_provider(row.get('place_name'), row.get('source'), row.get('notes'))
+        label = derive_provider(row.get('place_name'), row.get('source'), row.get('notes'), operators)
         bucket = buckets.setdefault(label.lower(), {
             'spellings': Counter(),
             'record_count': 0,

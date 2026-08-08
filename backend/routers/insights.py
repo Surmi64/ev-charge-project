@@ -9,7 +9,7 @@ try:
     from backend.db import column_exists, get_db
     from backend.forecast import build_forecast
     from backend.fuel_comparison import annotate_trend, resolve_basis
-    from backend.providers import aggregate_providers
+    from backend.providers import aggregate_providers, collect_operators
     from backend.routers.vehicles import has_archive_support
 except ModuleNotFoundError:
     from activity import get_activity_feed
@@ -18,7 +18,7 @@ except ModuleNotFoundError:
     from db import column_exists, get_db
     from forecast import build_forecast
     from fuel_comparison import annotate_trend, resolve_basis
-    from providers import aggregate_providers
+    from providers import aggregate_providers, collect_operators
     from routers.vehicles import has_archive_support
 
 router = APIRouter(tags=['insights'])
@@ -753,7 +753,21 @@ def get_analytics_summary(
         """,
         provider_params,
     )
-    providers = aggregate_providers(cur.fetchall())
+    range_rows = cur.fetchall()
+
+    # The operator vocabulary is read from the whole history, not from the range: which
+    # provider a place belongs to must not depend on the range selector. Only the three
+    # naming columns are read, and only from this account -- the tenant policy is what
+    # scopes it.
+    cur.execute(
+        """
+        SELECT place_name, source, notes
+        FROM vehicle_events
+        WHERE user_id = %s AND event_type IN ('charging', 'fueling');
+        """,
+        [user_id],
+    )
+    providers = aggregate_providers(range_rows, collect_operators(cur.fetchall()))
 
     serialized_vehicle_stats = [
         {
