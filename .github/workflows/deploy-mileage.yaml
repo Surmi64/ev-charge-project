@@ -1,0 +1,156 @@
+# Deploys the Mileage stack onto the dev server through a self-hosted runner that
+# runs *on that server*. There is no ssh step and no artifact: the runner is already
+# where the containers live, so the job just moves the checkout forward and rebuilds.
+#
+# What the runner needs (set up separately):
+#   * labels `self-hosted` and `mileage` — the `mileage` label is what keeps this job
+#     off the legacy ev-charge runner, whose stack must not be touched
+#   * a user that can run `docker` and can write to /var/mileage_project (owned by
+#     surmi64), and whose ssh key can `git fetch` from origin
+#
+# Why it deploys in place instead of from the runner workspace: the real deployment
+# config, docker-compose-server.yaml, is deliberately not in git (it carries the live
+# JWT secret and the 127.0.0.1 bindings) and lives only in /var/mileage_project. Using
+# that directory keeps one working copy on the box — the same one you get when you ssh
+# in and run compose by hand.
+#
+# On failure nothing is rolled back automatically. The previous commit is printed in the
+# job summary; redeploy it with workflow_dispatch and `ref` set to that sha.
+
+name: Deploy Mileage
+
+on:
+  push:
+    branches:
+      - micro-saas
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'sql/**'
+      - '.github/workflows/deploy-mileage.yaml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit or branch to deploy (default: the ref this run was started from)'
+        required: false
+        type: string
+      skip_migrations:
+        description: 'Skip alembic upgrade head'
+        required: false
+        default: false
+        type: boolean
+      allow_dirty:
+        description: 'Deploy even if the server working copy has uncommitted changes (they are discarded)'
+        required: false
+        default: false
+        type: boolean
+
+# One deploy at a time, and never cancel one midway: a half-built stack is worse than a
+# queued run.
+concurrency:
+  group: deploy-mileage
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to dev server
+    runs-on: [self-hosted, proxmox]
+
+    env:
+      DEPLOY_DIR: /var/mileage_project
+      COMPOSE_FILE: docker-compose-server.yaml
+      BACKEND_HEALTH_URL: http://127.0.0.1:4646/health
+      FRONTEND_URL: http://127.0.0.1:4242
+
+    steps:
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          test -d "$DEPLOY_DIR/.git" || { echo "::error::$DEPLOY_DIR is not a git working copy"; exit 1; }
+          test -f "$DEPLOY_DIR/$COMPOSE_FILE" || { echo "::error::$DEPLOY_DIR/$COMPOSE_FILE is missing — it is intentionally untracked, restore it on the server"; exit 1; }
+          docker compose version
+          echo "PREVIOUS_SHA=$(git -C "$DEPLOY_DIR" rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update working copy
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+
+          DIRTY="$(git status --porcelain)"
+          if [ -n "$DIRTY" ] && [ "${{ inputs.allow_dirty }}" != "true" ]; then
+            echo "$DIRTY"
+            echo "::error::Uncommitted changes on the server. Commit or stash them, or re-run with allow_dirty."
+            exit 1
+          fi
+
+          git fetch --prune origin
+          TARGET="${{ inputs.ref }}"
+          [ -n "$TARGET" ] || TARGET="${GITHUB_SHA}"
+          SHA="$(git rev-parse --verify --quiet "origin/${TARGET}^{commit}" || git rev-parse --verify "${TARGET}^{commit}")"
+
+          # Only tracked files are reset. No `git clean`: docker-compose-server.yaml is
+          # kept out of git through .git/info/exclude, and a clean that reached ignored
+          # files would delete the deployment config.
+          git reset --hard "$SHA"
+          echo "DEPLOYED_SHA=$SHA" >> "$GITHUB_ENV"
+          git --no-pager log -1 --format='Deploying %h %s' "$SHA"
+
+      - name: Build and start the stack
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+          docker compose -f "$COMPOSE_FILE" up -d --build --remove-orphans
+
+      - name: Run migrations
+        if: ${{ inputs.skip_migrations != true }}
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+          # A database created from sql/phase0_bootstrap.sql stamps alembic_version
+          # itself, so this is a no-op there and only does work for real schema changes.
+          # It runs after the containers are up, which leaves a short window where new
+          # code sees the old schema — acceptable at this size, worth knowing about.
+          docker compose -f "$COMPOSE_FILE" exec -T backend alembic upgrade head
+
+      - name: Wait for health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS "$BACKEND_HEALTH_URL" >/dev/null 2>&1; then
+              echo "Backend healthy after ${i} attempt(s)"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "::error::Backend did not become healthy at $BACKEND_HEALTH_URL"
+              exit 1
+            fi
+            sleep 2
+          done
+          curl -fsSI "$FRONTEND_URL" | head -n 1
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          cd "$DEPLOY_DIR"
+          docker compose -f "$COMPOSE_FILE" ps || true
+          docker compose -f "$COMPOSE_FILE" logs --tail=80 || true
+
+      - name: Summary
+        if: always()
+        run: |
+          cd "$DEPLOY_DIR"
+          {
+            echo "### Mileage deploy"
+            echo
+            echo "- Result: ${{ job.status }}"
+            echo "- Deployed: \`${DEPLOYED_SHA:-unchanged}\`"
+            echo "- Previous: \`${PREVIOUS_SHA:-unknown}\` (redeploy this with workflow_dispatch → ref to roll back)"
+            echo
+            echo '```'
+            docker compose -f "$COMPOSE_FILE" ps 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune dangling images
+        if: always()
+        run: docker image prune -f

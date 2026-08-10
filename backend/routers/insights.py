@@ -72,6 +72,12 @@ def _get_previous_month(value: date) -> date:
     return date(value.year, value.month - 1, 1)
 
 
+def _months_back(value: date, months: int) -> date:
+    """The first of the month `months` before `value`'s own month."""
+    total = value.year * 12 + (value.month - 1) - months
+    return date(total // 12, total % 12 + 1, 1)
+
+
 _TREND_BUCKETS = frozenset({'day', 'week', 'month'})
 
 
@@ -187,12 +193,15 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     )
     totals = cur.fetchone() or {}
 
-    monthly_stats = _fetch_monthly_stats(cur, user_id, db=db)
-    monthly_stats_by_key = {row['month']: row for row in monthly_stats}
     current_month_start = date.today().replace(day=1)
     previous_month_start = _get_previous_month(current_month_start)
-    current_month_key = current_month_start.strftime('YYYY-MM')
-    previous_month_key = previous_month_start.strftime('YYYY-MM')
+    # Bounded to the twelve buckets the dashboard card promises. Unbounded, this returned
+    # every month on file, so a thirteenth bar appeared under a "Last 12 months" heading
+    # as soon as an account's history outgrew the title.
+    monthly_stats = _fetch_monthly_stats(
+        cur, user_id, db=db, start_date=_months_back(current_month_start, 11),
+    )
+    monthly_stats_by_key = {row['month']: row for row in monthly_stats}
     current_month = monthly_stats_by_key.get(current_month_start.strftime('%Y-%m'), _empty_period(current_month_start.strftime('%Y-%m')))
     previous_month = monthly_stats_by_key.get(previous_month_start.strftime('%Y-%m'), _empty_period(previous_month_start.strftime('%Y-%m')))
 

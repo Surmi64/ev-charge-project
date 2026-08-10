@@ -3,13 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from backend.auth_utils import get_current_user_id
     from backend.billing import get_tenant_db, require_write_access
-    from backend.db import column_exists, get_vehicle_column
+    from backend.db import column_exists, get_vehicle_column, table_exists
     from backend.schemas import VehicleCreate, VehicleUpdate
     from backend.vehicle_rules import normalize_vehicle_payload
 except ModuleNotFoundError:
     from auth_utils import get_current_user_id
     from billing import get_tenant_db, require_write_access
-    from db import column_exists, get_vehicle_column
+    from db import column_exists, get_vehicle_column, table_exists
     from schemas import VehicleCreate, VehicleUpdate
     from vehicle_rules import normalize_vehicle_payload
 
@@ -68,19 +68,40 @@ def get_vehicles(
     db=Depends(get_tenant_db),
 ):
     cur = db.cursor()
+    # The highest reading filed so far, which RecordDialog compares a freshly typed
+    # odometer against. MAX rather than the most recent by date: a back-dated record
+    # would otherwise lower the baseline and stop catching the next fat-fingered entry.
+    # Falls back to the vehicle's starting reading so a car with no history still has one.
+    last_odometer = (
+        '''COALESCE(
+               (SELECT MAX(e.odometer_km) FROM vehicle_events e
+                 WHERE e.vehicle_id = v.id AND e.user_id = v.user_id),
+               v.starting_odometer_km
+           ) AS last_odometer_km'''
+        if table_exists(db, 'vehicle_events')
+        else 'v.starting_odometer_km AS last_odometer_km'
+    )
     if has_archive_support(db):
-        archived_filter = '' if include_archived else 'AND is_archived = FALSE'
+        archived_filter = '' if include_archived else 'AND v.is_archived = FALSE'
         cur.execute(
             f'''
-            SELECT *
-            FROM vehicles
-            WHERE user_id = %s {archived_filter}
-            ORDER BY is_archived ASC, is_default DESC, created_at DESC;
+            SELECT v.*, {last_odometer}
+            FROM vehicles v
+            WHERE v.user_id = %s {archived_filter}
+            ORDER BY v.is_archived ASC, v.is_default DESC, v.created_at DESC;
             ''',
             (user_id,),
         )
     else:
-        cur.execute('SELECT * FROM vehicles WHERE user_id = %s ORDER BY is_default DESC, created_at DESC;', (user_id,))
+        cur.execute(
+            f'''
+            SELECT v.*, {last_odometer}
+            FROM vehicles v
+            WHERE v.user_id = %s
+            ORDER BY v.is_default DESC, v.created_at DESC;
+            ''',
+            (user_id,),
+        )
     return cur.fetchall()
 
 

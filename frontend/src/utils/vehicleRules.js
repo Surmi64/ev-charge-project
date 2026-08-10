@@ -56,3 +56,24 @@ export function requiresBatteryCapacity(fuelType) {
 export function supportsHeatPump(fuelType) {
   return isElectricVehicle(fuelType);
 }
+
+/**
+ * How far past the highest reading on file an odometer entry may go before the form
+ * questions it, in kilometres.
+ *
+ * A single mistyped reading is unusually expensive here: distance is derived from the
+ * gaps between readings, so one extra digit inflates the fleet distance, flattens cost
+ * per 100 km, and — because the petrol-comparison line is drawn on the same axis as the
+ * spend bars — rescales the Analytics chart until the bars are sub-pixel.
+ *
+ * A battery car gets the tighter limit because its range makes a longer gap between two
+ * charges implausible; anything with a tank can cross a country between fills. Both are
+ * deliberately well above a normal week, since this only ever warns and a driver who
+ * really did that trip must be able to file it.
+ */
+export const ELECTRIC_ODOMETER_JUMP_KM = 700;
+export const DEFAULT_ODOMETER_JUMP_KM = 1200;
+
+export function getOdometerJumpLimitKm(fuelType) {
+  return isElectricVehicle(fuelType) ? ELECTRIC_ODOMETER_JUMP_KM : DEFAULT_ODOMETER_JUMP_KM;
+}

@@ -1,8 +1,8 @@
-const CACHE_NAME = 'ev-charge-v2';
+const CACHE_NAME = 'mileage-v3';
 const ASSETS = [
   '/',
   '/index.html',
-  '/bolt.svg'
+  '/gauge.svg'
 ];
 
 self.addEventListener('install', (event) => {

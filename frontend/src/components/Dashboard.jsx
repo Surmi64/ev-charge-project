@@ -40,6 +40,7 @@ import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { createFormatters } from '../utils/units';
+import { pluralize } from '../utils/plural';
 import { StackTopBar } from '../utils/chartShapes';
 import { DashboardSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
@@ -223,8 +224,8 @@ const Dashboard = () => {
 
   const costDelta = getDelta(current.total_cost, previous.total_cost, 'lower');
   const supporting = [
-    { label: 'Driving spend', value: huf(current.session_cost), hint: `${current.session_count || 0} sessions`, color: theme.palette.primary.main },
-    { label: 'Other costs', value: huf(current.expense_cost), hint: `${current.expense_count || 0} entries`, color: theme.palette.secondary.main },
+    { label: 'Driving spend', value: huf(current.session_cost), hint: pluralize(current.session_count || 0, 'session'), color: theme.palette.primary.main },
+    { label: 'Other costs', value: huf(current.expense_cost), hint: pluralize(current.expense_count || 0, 'entry', 'entries'), color: theme.palette.secondary.main },
     { label: `Cost ${fmt.perDistanceLabel}`, value: fmt.moneyPerHundred(current.avg_cost_per_100km), hint: `${fmt.distance(current.total_distance_km)} tracked`, color: theme.palette.warning.main },
   ];
 

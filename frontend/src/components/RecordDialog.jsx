@@ -25,7 +25,7 @@ import {
 } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
-import { getAllowedSessionTypes } from '../utils/vehicleRules';
+import { getAllowedSessionTypes, getOdometerJumpLimitKm } from '../utils/vehicleRules';
 import { EXPENSE_CATEGORIES } from '../utils/expenseCategories';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
@@ -147,6 +147,23 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
   }, [form, isSession]);
 
   const valid = Object.keys(errors).length === 0;
+
+  // A warning, never an error: an implausible reading is usually a slipped decimal
+  // point, but it is occasionally a real long trip, and the person filing it knows
+  // which. Blocking the save would make the rare honest case unfileable to catch the
+  // common typo. Editing an existing record skips the check — the reading it is being
+  // compared against may well be its own.
+  const odometerWarning = useMemo(() => {
+    if (!isSession || isEdit || form.odometer === '') return '';
+    const entered = Number(form.odometer);
+    const previous = Number(selectedVehicle?.last_odometer_km);
+    if (!Number.isFinite(entered) || !Number.isFinite(previous)) return '';
+    const limit = getOdometerJumpLimitKm(selectedVehicle?.fuel_type);
+    const jump = entered - previous;
+    if (jump <= limit) return '';
+    return `${fmt.distance(jump)} past the highest reading on file (${fmt.distance(previous)}). `
+      + 'Check for a missing decimal point — you can still save it.';
+  }, [form.odometer, isSession, isEdit, selectedVehicle, fmt]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -292,7 +309,9 @@ const RecordDialog = ({ open, onClose, onSaved, vehicles, editing }) => {
 
                 <Stack direction="row" spacing={{ xs: 1.5, sm: 2 }}>
                   <TextField label={`Odometer (${fmt.distanceShort})`} type="number" fullWidth
-                    value={form.odometer} onChange={set('odometer')} helperText="Optional" />
+                    value={form.odometer} onChange={set('odometer')}
+                    helperText={odometerWarning || 'Optional'}
+                    FormHelperTextProps={odometerWarning ? { sx: { color: 'warning.main' } } : undefined} />
                   {/* The provider comes from the location below — it names the place
                       once and every record filed there inherits it. This stays for the
                       records filed without a fix, and for anything the place name does

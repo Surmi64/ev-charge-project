@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Alert,
   Box,
@@ -38,14 +39,26 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
 import { toast } from 'sonner';
 import { apiFetch } from '../utils/api';
 import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getChartColors, getSeriesColor } from '../utils/chartColors';
 import { StackTopBar } from '../utils/chartShapes';
 import { formatCategoryLabel } from '../utils/expenseCategories';
+import {
+  BUCKET_NOUN,
+  buildColumns,
+  buildMetrics,
+  buildProviderSlices,
+  buildTickLabel,
+  buildTooltipLabel,
+  rankByMetric,
+} from '../utils/analyticsFormat';
+import AnalyticsReport from './AnalyticsReport';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
+import { pluralize } from '../utils/plural';
 import { AnalyticsSkeleton } from './SectionSkeletons';
 
 const RANGES = [
@@ -54,126 +67,6 @@ const RANGES = [
   { value: 'ytd', label: 'Year' },
   { value: 'all', label: 'All' },
 ];
-
-// The trend arrives bucketed by the range: 30 days as days, 90 as weeks, longer as
-// months. The backend sends every bucket as the ISO date it starts on, so parse once
-// and let the bucket decide how much of it to show.
-const parsePeriod = (value) => {
-  if (!value) return null;
-  const [y, m, d] = value.split('-').map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
-};
-
-// Axis ticks stay terse — a bare month repeated across two years is ambiguous, so the
-// year is added on the first tick and whenever a new one starts.
-const buildTickLabel = (bucket) => (value, index) => {
-  const dt = parsePeriod(value);
-  if (!dt) return '';
-  if (bucket === 'month') {
-    const month = dt.toLocaleDateString(undefined, { month: 'short' });
-    // The year is apostrophised rather than run together: a plain "Jul 25" is exactly
-    // how a day tick renders July 25th, and the two buckets must not look alike.
-    const startsYear = index === 0 || dt.getMonth() === 0;
-    return startsYear ? `${month} '${String(dt.getFullYear()).slice(-2)}` : month;
-  }
-  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-};
-
-// The tooltip has room to be unambiguous, and a week needs saying which week.
-const buildTooltipLabel = (bucket) => (value) => {
-  const dt = parsePeriod(value);
-  if (!dt) return '';
-  if (bucket === 'month') return dt.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  const full = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  return bucket === 'week' ? `Week of ${full}` : full;
-};
-
-const BUCKET_NOUN = { day: 'day', week: 'week', month: 'month' };
-
-// Built per render because the labels and formatters follow the account's units.
-const buildColumns = (fmt) => [
-  { id: 'name', label: 'Vehicle', numeric: false },
-  { id: 'total_cost', label: 'Total cost', numeric: true, format: fmt.money },
-  { id: 'session_cost', label: 'Driving', numeric: true, format: fmt.money },
-  { id: 'expense_cost', label: 'Other', numeric: true, format: fmt.money },
-  { id: 'distance_km', label: 'Distance', numeric: true, format: fmt.distance },
-  { id: `Per 100 ${fmt.distanceShort}`, label: `Per 100 ${fmt.distanceShort}`, numeric: true,
-    sortKey: 'cost_per_100km',
-    format: (v) => (v ? fmt.moneyPerHundred(v) : '—') },
-  { id: 'total_energy', label: 'Energy', numeric: true, format: (v) => (v ? fmt.energy(v) : '—') },
-];
-
-// Three ways to read "efficient", because they disagree and the disagreement matters:
-// a car can be the cheapest to drive while looking expensive overall simply because
-// its insurance is. Lower is better for all three.
-// compute() always works in the canonical per-100km figure; format() converts it, so
-// the ranking order stays identical whichever units are selected.
-const buildMetrics = (fmt) => ({
-  running: {
-    label: 'Cost to drive',
-    note: 'Charging and fuel only — what it costs to actually move the car.',
-    compute: (v) => (v.distance_km > 0 ? (Number(v.session_cost || 0) / v.distance_km) * 100 : null),
-    format: fmt.moneyPerHundred,
-  },
-  total: {
-    label: 'Total cost',
-    note: 'Everything divided by distance — fuel plus insurance, tax, maintenance.',
-    compute: (v) => (v.distance_km > 0 ? Number(v.cost_per_100km || 0) : null),
-    format: fmt.moneyPerHundred,
-  },
-  energy: {
-    label: 'Energy use',
-    note: 'Consumption regardless of price. Only vehicles that charge appear here.',
-    compute: (v) => (v.distance_km > 0 && v.total_energy > 0 ? (Number(v.total_energy) / v.distance_km) * 100 : null),
-    format: (v) => fmt.energy(v),
-  },
-});
-
-// Five, because that is how many series colours a palette carries — a sixth slice would
-// repeat one and put two identical wedges in the same ring. The long tail of one-off
-// providers goes into a single slice, which is also all it is worth.
-const PROVIDER_SLICES = 5;
-
-/**
- * Provider rows as pie slices, largest first, by whichever measure the chart is about.
- *
- * Two things never merge into the tail: nothing, and the unnamed bucket — that one is
- * kept separate and greyed, because "I do not know" is not a provider and folding it
- * into "3 more" would quietly claim it was.
- */
-const buildProviderSlices = (rows, key, colors, theme) => {
-  const withValue = rows.filter((row) => Number(row[key] || 0) > 0);
-  const named = withValue.filter((row) => row.provider)
-    .sort((a, b) => Number(b[key]) - Number(a[key]));
-  const unnamed = withValue.find((row) => !row.provider);
-
-  const slices = named.slice(0, PROVIDER_SLICES).map((row) => ({
-    key: row.provider,
-    name: row.provider,
-    value: Number(row[key]),
-    rate: row.avg_cost_per_kwh,
-    color: colors.get(row.provider),
-  }));
-
-  const tail = named.slice(PROVIDER_SLICES);
-  if (tail.length) {
-    slices.push({
-      key: '__tail',
-      name: `${tail.length} more`,
-      value: tail.reduce((sum, row) => sum + Number(row[key] || 0), 0),
-      color: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.32 : 0.28),
-    });
-  }
-  if (unnamed) {
-    slices.push({
-      key: '__unnamed',
-      name: 'Unnamed',
-      value: Number(unnamed[key]),
-      color: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.14),
-    });
-  }
-  return slices;
-};
 
 /**
  * One provider ring with its own legend.
@@ -278,6 +171,10 @@ const Analytics = () => {
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [drilldown, setDrilldown] = useState(null);
   const [forecast, setForecast] = useState(null);
+  // The printable report is only mounted while an export is running. It is a second
+  // rendering of everything on this page, charts included, and there is no reason to
+  // pay for it on every visit for the sake of a button most sessions never press.
+  const [exporting, setExporting] = useState(false);
 
   // The server decides the bucket from the range; read it back rather than deriving it
   // here, so the axis can never disagree with the data it is labelling. Falls back to
@@ -364,12 +261,7 @@ const Analytics = () => {
 
   // Vehicles without distance (or without charging, for the energy view) cannot be
   // placed on this scale, so they are counted out rather than shown as zero.
-  const ranked = useMemo(() => {
-    const rows = (data?.vehicle_stats || [])
-      .map((v) => ({ ...v, value: metric.compute(v) }))
-      .filter((v) => v.value !== null && v.value > 0);
-    return rows.sort((a, b) => a.value - b.value);
-  }, [data, metric]);
+  const ranked = useMemo(() => rankByMetric(data?.vehicle_stats, metric), [data, metric]);
 
   const excludedCount = (data?.vehicle_stats || []).length - ranked.length;
 
@@ -411,6 +303,29 @@ const Analytics = () => {
     });
     return rows;
   }, [data, forecast, projectionOn]);
+
+  /**
+   * Hand the report to the browser's own PDF writer.
+   *
+   * No jsPDF, no html2canvas: both would add more weight than the rest of this page
+   * put together, and a canvas snapshot rasterises every number on it. Printing keeps
+   * the charts as vectors and the figures as selectable text, and "Save as PDF" is
+   * already in the dialog on every platform this app runs on.
+   *
+   * The print call waits a frame: the report mounts in the same commit as `exporting`,
+   * and window.print() blocks the main thread, so calling it synchronously would
+   * capture the DOM before the charts had rendered into it.
+   */
+  useEffect(() => {
+    if (!exporting) return undefined;
+    const finish = () => setExporting(false);
+    window.addEventListener('afterprint', finish);
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+    return () => {
+      window.removeEventListener('afterprint', finish);
+      cancelAnimationFrame(frame);
+    };
+  }, [exporting]);
 
   const handleSort = (columnId) => {
     if (orderBy === columnId) setOrder(order === 'asc' ? 'desc' : 'asc');
@@ -464,8 +379,14 @@ const Analytics = () => {
   const providerColors = new Map(
     providers.filter((p) => p.provider).map((p, index) => [p.provider, getSeriesColor(theme, index)]),
   );
-  const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, theme);
-  const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, theme);
+  // The two greys the tail and the unnamed bucket wear. Passed in rather than derived
+  // inside the helper, because the PDF export shares the helper and paints on paper.
+  const sliceGreys = {
+    tailColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.32 : 0.28),
+    unnamedColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.14),
+  };
+  const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, sliceGreys);
+  const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, sliceGreys);
   const hasData = (data.vehicle_stats || []).length > 0;
   const rangeLabel = RANGES.find((r) => r.value === range)?.label.toLowerCase();
 
@@ -488,7 +409,20 @@ const Analytics = () => {
             Compare vehicles and see where the money actually goes.
           </Typography>
         </Box>
-        {rangeSelector}
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {rangeSelector}
+          {/* Disabled while the dialog is up: a second press would remount the report
+              underneath the one being printed. */}
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<PictureAsPdfOutlinedIcon />}
+            disabled={!hasData || exporting}
+            onClick={() => setExporting(true)}
+          >
+            Export PDF
+          </Button>
+        </Stack>
       </Stack>
 
       {!hasData ? (
@@ -504,7 +438,7 @@ const Analytics = () => {
               <Figure label="Total cost" value={huf(summary.total_operating_cost)} hint={rangeLabel}
                 color={theme.palette.secondary.main} />
               <Figure label="Distance" value={km(summary.total_distance_km)}
-                hint={`${(data.vehicle_stats || []).length} vehicles`} color={theme.palette.primary.main} />
+                hint={pluralize((data.vehicle_stats || []).length, 'vehicle')} color={theme.palette.primary.main} />
               <Figure label={`Cost per 100 ${fmt.distanceShort}`} value={huf(summary.avg_cost_per_100km)} hint="across the fleet"
                 color={theme.palette.warning.main} />
               <Figure label="Cost per kWh" value={huf(data.avg_cost_per_kwh)}
@@ -924,6 +858,26 @@ const Analytics = () => {
           </Card>
         </>
       )}
+
+      {/* Outside #root, which the print sheet hides — see the print block in App.css. */}
+      {exporting
+        ? createPortal(
+          <AnalyticsReport
+            data={data}
+            chartData={chartData}
+            forecast={forecast}
+            drilldown={drilldown}
+            projectionOn={projectionOn}
+            comparison={comparison}
+            rangeLabel={RANGES.find((r) => r.value === range)?.label}
+            trendBucket={trendBucket}
+            drilldownBucket={drilldownBucket}
+            fmt={fmt}
+            user={user}
+          />,
+          document.body,
+        )
+        : null}
     </Box>
   );
 };

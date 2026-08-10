@@ -31,6 +31,7 @@ import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
 import { EXPENSE_CATEGORIES } from '../utils/expenseCategories';
+import { pluralize } from '../utils/plural';
 import { CardListSkeleton } from './SectionSkeletons';
 
 const FREQUENCIES = [
@@ -58,10 +59,10 @@ const daysUntil = (isoDate) => {
 
 const dueLabel = (days) => {
   if (days === null) return { text: '—', color: 'default' };
-  if (days < 0) return { text: `${Math.abs(days)} days overdue`, color: 'error' };
+  if (days < 0) return { text: `${pluralize(Math.abs(days), 'day')} overdue`, color: 'error' };
   if (days === 0) return { text: 'Due today', color: 'warning' };
-  if (days <= 14) return { text: `In ${days} days`, color: 'warning' };
-  return { text: `In ${days} days`, color: 'default' };
+  if (days <= 14) return { text: `In ${pluralize(days, 'day')}`, color: 'warning' };
+  return { text: `In ${pluralize(days, 'day')}`, color: 'default' };
 };
 
 const RecurringExpenses = () => {
