@@ -95,6 +95,40 @@ export const rankByMetric = (stats, metric) => (stats || [])
   .filter((v) => v.value !== null && v.value > 0)
   .sort((a, b) => a.value - b.value);
 
+/**
+ * The trend rows the cost-over-time chart draws, with the projection folded in.
+ *
+ * Shared with the export, which builds its own rows whenever the report covers a
+ * subset of the fleet rather than what the page is showing.
+ */
+export const buildTrendRows = (trend, forecast, projectionOn) => {
+  const rows = (trend || []).map((row) => ({ ...row }));
+  if (!projectionOn) return rows;
+
+  const byPeriod = new Map(rows.map((row) => [row.period, row]));
+  (forecast?.months || []).forEach((month) => {
+    const existing = byPeriod.get(month.period);
+    if (existing) {
+      // The month under way: real spend so far, estimate stacked on top of it, so
+      // the bar is not silently double counted.
+      existing.projected_session_cost = month.session_cost;
+      existing.projected_expense_cost = month.expense_cost;
+    } else {
+      rows.push({
+        period: month.period,
+        session_cost: 0,
+        expense_cost: 0,
+        projected_session_cost: month.session_cost,
+        projected_expense_cost: month.expense_cost,
+        // Null rather than 0 so the efficiency line stops at the last real month
+        // instead of diving to the axis.
+        avg_cost_per_100km: null,
+      });
+    }
+  });
+  return rows;
+};
+
 // Five, because that is how many series colours a palette carries — a sixth slice would
 // repeat one and put two identical wedges in the same ring. The long tail of one-off
 // providers goes into a single slice, which is also all it is worth.

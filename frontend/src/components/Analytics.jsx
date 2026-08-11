@@ -53,9 +53,11 @@ import {
   buildProviderSlices,
   buildTickLabel,
   buildTooltipLabel,
+  buildTrendRows,
   rankByMetric,
 } from '../utils/analyticsFormat';
 import AnalyticsReport from './AnalyticsReport';
+import ExportOptionsDialog from './ExportOptionsDialog';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
 import { buildReportTheme } from '../utils/reportTheme';
@@ -177,6 +179,11 @@ const Analytics = () => {
   // rendering of everything on this page, charts included, and there is no reason to
   // pay for it on every visit for the sake of a button most sessions never press.
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  // What the report is rendering: its own copy of the data, because the export can
+  // cover a subset of the fleet while the page keeps showing all of it. Non-null only
+  // while a file is being built.
+  const [reportPayload, setReportPayload] = useState(null);
   // The element the exporter rasterises, handed back by the report itself.
   const reportRef = useRef(null);
 
@@ -280,33 +287,59 @@ const Analytics = () => {
   // two different time scales on one axis.
   const projectionOn = trendBucket === 'month' && Boolean(forecast?.available) && (forecast?.months?.length > 0);
 
-  const chartData = useMemo(() => {
-    const rows = (data?.trend || []).map((row) => ({ ...row }));
-    if (!projectionOn) return rows;
+  const chartData = useMemo(
+    () => buildTrendRows(data?.trend, forecast, projectionOn),
+    [data, forecast, projectionOn],
+  );
 
-    const byPeriod = new Map(rows.map((row) => [row.period, row]));
-    forecast.months.forEach((month) => {
-      const existing = byPeriod.get(month.period);
-      if (existing) {
-        // The month under way: real spend so far, estimate stacked on top of it, so
-        // the bar is not silently double counted.
-        existing.projected_session_cost = month.session_cost;
-        existing.projected_expense_cost = month.expense_cost;
-      } else {
-        rows.push({
-          period: month.period,
-          session_cost: 0,
-          expense_cost: 0,
-          projected_session_cost: month.session_cost,
-          projected_expense_cost: month.expense_cost,
-          // Null rather than 0 so the efficiency line stops at the last real month
-          // instead of diving to the axis.
-          avg_cost_per_100km: null,
-        });
+  /**
+   * Turn the export dialog's answers into the report's own data, then mount it.
+   *
+   * A subset of the fleet means the page's numbers are the wrong ones: every total,
+   * the trend, the categories and the provider rings are all fleet-wide aggregates,
+   * and there is no way to re-cut them client-side. So the selection goes back to the
+   * server and the report renders that response instead — the page itself is left
+   * alone, since the export is not a change of view.
+   */
+  const handleExportConfirm = useCallback(async (config) => {
+    setExportOpen(false);
+    setExporting(true);
+    try {
+      let reportData = data;
+      if (config.vehicleIds) {
+        const query = config.vehicleIds.map((id) => `vehicles=${id}`).join('&');
+        const res = await apiFetch(`/api/analytics/summary?range=${range}&${query}`);
+        if (!res.ok) throw new Error('Could not read the figures for those vehicles.');
+        reportData = await res.json();
       }
-    });
-    return rows;
-  }, [data, forecast, projectionOn]);
+
+      const bucket = reportData.trend_bucket || 'month';
+      // Same rule the page applies: months only, because the forecast is monthly and
+      // pasting months next to daily bars would put two time scales on one axis.
+      const reportProjection = config.projection
+        && bucket === 'month'
+        && Boolean(forecast?.available)
+        && (forecast?.months?.length > 0);
+
+      // The drilldown is one vehicle's card. It goes only if it was asked for and the
+      // vehicle it describes is inside the selection.
+      const drilldownWanted = config.sections.includes('drilldown')
+        && drilldown
+        && (!config.vehicleIds || config.vehicleIds.includes(Number(drilldown.vehicle?.id)));
+
+      setReportPayload({
+        data: reportData,
+        chartData: buildTrendRows(reportData.trend, forecast, reportProjection),
+        projectionOn: reportProjection,
+        drilldown: drilldownWanted ? drilldown : null,
+        sections: config.sections,
+        bucket,
+      });
+    } catch (error) {
+      toast.error(error.message || 'Could not build the PDF.');
+      setExporting(false);
+    }
+  }, [data, drilldown, forecast, range]);
 
   /**
    * Write the report out as a PDF.
@@ -318,13 +351,13 @@ const Analytics = () => {
    * on every platform and carries the account's own palette and background.
    *
    * The work waits two frames after the mount: the report renders in the same commit
-   * as `exporting`, and rasterising it in that commit would catch the charts before
+   * as the payload, and rasterising it in that commit would catch the charts before
    * Recharts had laid them out. Fonts are waited on for the same reason — the report
    * measured with a fallback face and drawn with the real one comes out with its
    * headings clipped.
    */
   useEffect(() => {
-    if (!exporting) return undefined;
+    if (!reportPayload) return undefined;
     let cancelled = false;
 
     const run = async () => {
@@ -340,13 +373,16 @@ const Analytics = () => {
       } catch {
         toast.error('Could not build the PDF. Try again, or narrow the range.');
       } finally {
-        if (!cancelled) setExporting(false);
+        if (!cancelled) {
+          setReportPayload(null);
+          setExporting(false);
+        }
       }
     };
 
     run();
     return () => { cancelled = true; };
-  }, [exporting, range, theme.palette.mode, user?.theme_palette]);
+  }, [reportPayload, range, theme.palette.mode, user?.theme_palette]);
 
   const handleSort = (columnId) => {
     if (orderBy === columnId) setOrder(order === 'asc' ? 'desc' : 'asc');
@@ -439,7 +475,7 @@ const Analytics = () => {
             size="small"
             startIcon={<PictureAsPdfOutlinedIcon />}
             disabled={!hasData || exporting}
-            onClick={() => setExporting(true)}
+            onClick={() => setExportOpen(true)}
           >
             {exporting ? 'Building PDF…' : 'Export PDF'}
           </Button>
@@ -883,20 +919,34 @@ const Analytics = () => {
         </>
       )}
 
+      <ExportOptionsDialog
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        onConfirm={handleExportConfirm}
+        vehicles={(data.vehicle_stats || []).map((v) => ({ id: v.id, name: v.name }))}
+        availability={{
+          categories: (data.expense_categories || []).length > 0,
+          providers: (data.providers || []).length > 0,
+          drilldown: Boolean(drilldown),
+        }}
+        projectionAvailable={projectionOn}
+      />
+
       {/* On document.body and parked off-screen — see the report block in App.css. It
           has to be laid out to be rasterised, so it cannot be display: none. */}
-      {exporting
+      {reportPayload
         ? createPortal(
           <AnalyticsReport
-            data={data}
-            chartData={chartData}
-            forecast={forecast}
-            drilldown={drilldown}
-            projectionOn={projectionOn}
-            comparison={comparison}
+            data={reportPayload.data}
+            chartData={reportPayload.chartData}
+            forecast={reportPayload.projectionOn ? forecast : null}
+            drilldown={reportPayload.drilldown}
+            projectionOn={reportPayload.projectionOn}
+            comparison={reportPayload.data.fuel_comparison || null}
+            sections={reportPayload.sections}
             rangeLabel={RANGES.find((r) => r.value === range)?.label}
-            trendBucket={trendBucket}
-            drilldownBucket={drilldownBucket}
+            trendBucket={reportPayload.bucket}
+            drilldownBucket={reportPayload.drilldown?.trend_bucket || reportPayload.bucket}
             fmt={fmt}
             user={user}
             mode={theme.palette.mode}

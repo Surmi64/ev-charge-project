@@ -169,7 +169,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 COALESCE(SUM(ve.total_cost), 0) AS total_cost
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s{active_vehicles}
+            WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
             GROUP BY v.id, v.starting_odometer_km
         ),
         distance_totals AS (
@@ -228,7 +228,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 ) AS distance_km
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s{active_vehicles}
+            WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
             GROUP BY v.id, v.starting_odometer_km
         )
         SELECT
@@ -481,6 +481,7 @@ def _fetch_trend_stats(
     start_date: date | None = None,
     end_date: date | None = None,
     vehicle_id: int | None = None,
+    vehicle_ids: list[int] | None = None,
     exclude_archived: bool = True,
 ) -> list[dict]:
     # bucket is interpolated into DATE_TRUNC, so it is whitelisted rather than bound.
@@ -523,6 +524,15 @@ def _fetch_trend_stats(
         distance_filters.append('vehicle_id = %s')
         event_params.append(vehicle_id)
         distance_params.append(vehicle_id)
+
+    # The export's vehicle picker. Separate from vehicle_id, which is the drilldown's
+    # single vehicle: this narrows the fleet-wide trend to a chosen subset, and both
+    # can be absent.
+    if vehicle_ids is not None:
+        event_filters.append('vehicle_id = ANY(%s)')
+        distance_filters.append('vehicle_id = ANY(%s)')
+        event_params.append(list(vehicle_ids))
+        distance_params.append(list(vehicle_ids))
 
     # Appended rather than joined in: the clause is a bare NOT EXISTS with no
     # placeholder, so it must not disturb the parameter ordering below.
@@ -610,16 +620,34 @@ def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
 @router.get('/analytics/summary')
 def get_analytics_summary(
     range_key: str = Query('all', alias='range'),
+    vehicle_ids: list[int] | None = Query(None, alias='vehicles'),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_tenant_db),
 ):
+    """Fleet-wide analytics for a range, optionally narrowed to chosen vehicles.
+
+    `vehicles` is repeatable (`?vehicles=1&vehicles=2`) and exists for the PDF export,
+    which lets the account decide which vehicles the report covers. Omitting it — or
+    naming every vehicle — reports the whole active fleet, which is what the page does.
+    """
     cur = db.cursor()
     normalized_range, start_date, end_date = _get_analytics_range_bounds(range_key)
+
+    # An empty list is not "no filter": ?vehicles= with nothing after it asks for
+    # nothing, and answering with the whole fleet would be the opposite.
+    selected_vehicles = list(vehicle_ids) if vehicle_ids is not None else None
 
     # Archived vehicles are retired from reporting, so they drop out of every
     # aggregate here as well as out of the per-vehicle breakdown below.
     active_events = _active_events_predicate(db)
     active_vehicles = _active_vehicle_clause(db)
+
+    # Narrows the vehicles table itself, so the per-vehicle rows and every total
+    # derived from them cover exactly the selection.
+    vehicle_scope = ' AND v.id = ANY(%s)' if selected_vehicles is not None else ''
+    # The parameters one `WHERE v.user_id = %s{active_vehicles}{vehicle_scope}` needs.
+    # The vehicle_stats query carries that clause twice, so it is spliced in twice.
+    scope_params: list[object] = [user_id] + ([selected_vehicles] if selected_vehicles is not None else [])
 
     weekly_filters = ['user_id = %s', "event_type = 'charging'"]
     weekly_params: list[object] = [user_id]
@@ -642,6 +670,18 @@ def get_analytics_summary(
         provider_filters.append(active_events)
         # join_filters needs nothing: odometer_stats drives off `vehicles`, which
         # active_vehicles already narrows to the live fleet.
+
+    if selected_vehicles is not None:
+        for filters, params, column in (
+            (weekly_filters, weekly_params, 'vehicle_id'),
+            (event_filters, event_params, 'vehicle_id'),
+            (join_filters, join_params, 've.vehicle_id'),
+            (expense_filters, expense_params, 'vehicle_id'),
+            (avg_filters, avg_params, 'vehicle_id'),
+            (provider_filters, provider_params, 'vehicle_id'),
+        ):
+            filters.append(f'{column} = ANY(%s)')
+            params.append(selected_vehicles)
 
     if start_date is not None:
         start_value = start_date.isoformat()
@@ -709,7 +749,7 @@ def get_analytics_summary(
                 ) AS distance_km
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id{' AND ' + ' AND '.join(join_filters) if join_filters else ''}
-            WHERE v.user_id = %s{active_vehicles}
+            WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
             GROUP BY v.id, v.starting_odometer_km
         )
         SELECT
@@ -728,16 +768,17 @@ def get_analytics_summary(
         FROM vehicles v
         LEFT JOIN event_stats ON event_stats.vehicle_id = v.id
         LEFT JOIN odometer_stats ON odometer_stats.vehicle_id = v.id
-        WHERE v.user_id = %s{active_vehicles}
+        WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
         GROUP BY v.id, v.name, v.make, v.model, v.fuel_type, event_stats.total_energy, event_stats.session_cost, event_stats.expense_cost, odometer_stats.distance_km
         ORDER BY total_cost DESC, name ASC;
         """,
-        event_params + join_params + [user_id, user_id],
+        event_params + join_params + scope_params + scope_params,
     )
     vehicle_stats = cur.fetchall()
     trend_bucket = _trend_bucket_for_range(normalized_range)
     trend = _fetch_trend_stats(
         cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
+        vehicle_ids=selected_vehicles,
     )
 
     cur.execute(

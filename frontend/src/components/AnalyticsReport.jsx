@@ -190,11 +190,16 @@ const AnalyticsReport = ({
   rangeLabel,
   trendBucket,
   drilldownBucket,
+  sections,
   fmt,
   user,
   mode,
   ref,
 }) => {
+  // Which blocks the export dialog left in. Undefined means every one of them, so a
+  // caller that does not care about the picker keeps the whole report.
+  const shows = (id) => !sections || sections.includes(id);
+
   const theme = buildReportTheme(user?.theme_palette, mode);
   const { brand, series, ink, inkMuted, onFill } = theme;
   const huf = fmt.money;
@@ -252,6 +257,7 @@ const AnalyticsReport = ({
         </div>
       </header>
 
+      {shows('summary') ? (
       <Section title="Summary" fixed>
         <div className="pr-figures">
           <Figure label="Total cost" value={huf(summary.total_operating_cost)} hint={rangeLabel}
@@ -274,7 +280,9 @@ const AnalyticsReport = ({
           </p>
         ) : null}
       </Section>
+      ) : null}
 
+      {shows('trendChart') ? (
       <Section
         fixed
         title="Cost over time"
@@ -359,10 +367,12 @@ const AnalyticsReport = ({
         </p>
 
       </Section>
+      ) : null}
 
       {/* The tooltip, unrolled — and a card of its own, because a chart and a table of
           every period together are taller than a page can hold beside anything else,
           which left the summary sharing a page with nothing but white. */}
+      {shows('trendTable') ? (
       <Section fixed title={`Cost over time — every ${BUCKET_NOUN[trendBucket] || 'month'}`}>
         <table className="pr-table pr-table-full">
           <thead>
@@ -413,12 +423,14 @@ const AnalyticsReport = ({
           </p>
         ) : null}
       </Section>
+      ) : null}
 
       {/* The rings come before the all-figures table rather than after it. The three
           efficiency leaderboards used to sit here — every metric written out, since a
           PDF reader cannot flip the page's toggle — but they said what the table below
           already says, one row per vehicle, and pushed the only two pictures in the
           second half of the report onto a page of their own. */}
+      {shows('split') ? (
       <Section title="Where the money goes">
         <table className="pr-table pr-table-full">
           <thead>
@@ -443,7 +455,9 @@ const AnalyticsReport = ({
         </table>
 
       </Section>
+      ) : null}
 
+      {shows('categories') ? (
       <Section title="Cost categories">
         {categories.length ? (
           <div className="pr-pie-row">
@@ -481,12 +495,13 @@ const AnalyticsReport = ({
           <p className="pr-note">No costs recorded in this range.</p>
         )}
       </Section>
+      ) : null}
 
       {/* One ring per section rather than both in one. Every section is a unit of
           pagination, so a section is also the size of hole the packer can fill: two
           rings in one card is 110 mm that has to land somewhere whole, and the page
           it did not fit on kept the gap. */}
-      {providers.length ? (
+      {providers.length && shows('providerStops') ? (
         <Section title="Providers — stops" note="How often you stop where.">
           <ProviderBlock slices={stopsSlices} valueHeader="Records"
             formatValue={(value) => `${value}`} empty="No charging or fuel records in this range."
@@ -494,7 +509,7 @@ const AnalyticsReport = ({
         </Section>
       ) : null}
 
-      {providers.length ? (
+      {providers.length && shows('providerEnergy') ? (
         <Section title="Providers — energy" note="And how much energy you take there.">
           <ProviderBlock slices={energySlices} valueHeader="Energy"
             formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
@@ -502,6 +517,7 @@ const AnalyticsReport = ({
         </Section>
       ) : null}
 
+      {shows('vehicleTable') ? (
       <Section title="All figures">
         <table className="pr-table pr-table-full">
           <thead>
@@ -529,6 +545,7 @@ const AnalyticsReport = ({
           </tbody>
         </table>
       </Section>
+      ) : null}
 
       {drilldown ? (
         <Section title={`Single vehicle — ${drilldown.vehicle?.name || ''}`}
