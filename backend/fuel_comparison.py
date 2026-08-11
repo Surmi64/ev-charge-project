@@ -8,11 +8,18 @@ A combustion car still needs insurance, tax and servicing, and most of those it 
 *more* of; putting a fuel-only figure next to a total that includes them would flatter
 the comparison in a direction the data cannot support.
 
-**It uses the account's own distance**, whatever the chart is currently showing. No
-filtering by fuel type: if the chart is showing a petrol car, the line lands close to
-its actual spend, which is honest — that is what the comparison means for that car.
-Silently dropping combustion vehicles from the distance would make the line disagree
-with the bars beside it for no reason the user could see.
+**It uses the account's own distance**, whatever the chart is currently showing.
+Combustion vehicles are not dropped from the distance: a month in a mixed fleet must
+compare the same kilometres the bars beside it were built from, or the line disagrees
+with them for no reason the user could see.
+
+**But a period driven entirely on petrol or diesel gets no comparison at all.** The
+line answers "what would this have cost in a combustion car", and for a petrol car it
+answers it by restating its own fuel bill — a dashed line shadowing the bars, carrying
+no information and inviting the reader to look for a difference that cannot exist. It
+is the mixed and electric periods the question is for. This is per period rather than
+per account, so a fleet that runs both keeps the line on the months where it means
+something and loses it on the months the petrol car drove alone.
 
 **The price is a real one where possible.** An account that fuels anything at all has
 its own price per litre in its records, and that beats any figure this module could
@@ -150,22 +157,42 @@ def equivalent_cost(distance_km: float, basis: dict) -> float | None:
 
 
 def annotate_trend(rows: list[dict], basis: dict) -> list[dict]:
-    """Add the comparison to each trend bucket.
+    """Add the comparison to each trend bucket, and say whether it applied anywhere.
 
     The key is absent rather than null when there is no price, so Recharts draws no
     line at all instead of a flat one along zero — a zero here would read as "petrol
     would have been free".
+
+    `basis['applies']` is what the client gates the line, the legend and the table
+    column on. It is separate from `available`, which says whether a price could be
+    resolved at all: the settings screen offers to fix an unavailable comparison, and
+    a petrol-only account has nothing to fix.
+
+    `combustion_distance_km` is consumed here rather than sent on — it exists to
+    answer this question and nothing on the client asks it.
     """
-    if not basis.get('available'):
-        return rows
-    for row in rows:
+    applied = False
+    for row in rows if basis.get('available') else []:
         # A bucket with no measured distance is almost always a missing odometer
         # reading rather than a car that sat still — the very first bucket of an
         # account has nothing to difference against, so it always reports zero km.
         # Writing 0 there would draw the line down to the axis and say petrol would
         # have been free that month. Leaving the key out breaks the line instead,
         # which is what "we do not know" should look like.
-        if float(row.get('total_distance_km') or 0) <= 0:
+        distance = float(row.get('total_distance_km') or 0)
+        combustion = float(row.get('combustion_distance_km') or 0)
+        if distance <= 0:
             continue
-        row['petrol_equivalent_cost'] = equivalent_cost(row.get('total_distance_km'), basis)
+        # Every kilometre in this bucket came from a petrol or diesel car, so the
+        # comparison would be the car comparing against itself.
+        if combustion >= distance:
+            continue
+        row['petrol_equivalent_cost'] = equivalent_cost(distance, basis)
+        applied = True
+
+    # Dropped on every path, including the one that never looked at it.
+    for row in rows:
+        row.pop('combustion_distance_km', None)
+
+    basis['applies'] = applied
     return rows

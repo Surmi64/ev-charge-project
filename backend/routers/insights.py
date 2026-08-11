@@ -117,6 +117,8 @@ def _serialize_trend_row(row: dict) -> dict:
         'expense_cost': _float(row.get('expense_cost')),
         'expense_count': _int(row.get('expense_count')),
         'total_distance_km': total_distance_km,
+        # Not sent to the client: the petrol comparison reads it and drops it again.
+        'combustion_distance_km': _float(row.get('combustion_distance_km')),
         'total_cost': total_cost,
         'avg_cost_per_100km': (total_cost / total_distance_km * 100) if total_distance_km > 0 else 0,
     }
@@ -551,6 +553,12 @@ def _fetch_trend_stats(
             SELECT
                 DATE_TRUNC('{bucket}', occurred_at) AS bucket_start,
                 occurred_at,
+                -- Correlated rather than joined: every filter in distance_where names
+                -- its columns unqualified, and vehicles carries user_id too.
+                (
+                    SELECT v.fuel_type FROM vehicles v
+                    WHERE v.id = vehicle_events.vehicle_id AND v.user_id = vehicle_events.user_id
+                ) AS fuel_type,
                 odometer_km - LAG(odometer_km) OVER (
                     PARTITION BY vehicle_id ORDER BY occurred_at, id
                 ) AS delta_km
@@ -560,7 +568,12 @@ def _fetch_trend_stats(
         bucket_distance AS (
             SELECT
                 bucket_start,
-                COALESCE(SUM(GREATEST(delta_km, 0)), 0) AS total_distance_km
+                COALESCE(SUM(GREATEST(delta_km, 0)), 0) AS total_distance_km,
+                -- Split out so the petrol comparison can tell whether there is
+                -- anything to compare: see fuel_comparison.annotate_trend.
+                COALESCE(SUM(GREATEST(delta_km, 0)) FILTER (
+                    WHERE fuel_type IN ('petrol', 'diesel')
+                ), 0) AS combustion_distance_km
             FROM odometer_deltas
             WHERE delta_km IS NOT NULL{bucket_where}
             GROUP BY bucket_start
@@ -573,6 +586,7 @@ def _fetch_trend_stats(
             bucket_event_stats.expense_cost,
             bucket_event_stats.expense_count,
             COALESCE(bucket_distance.total_distance_km, 0) AS total_distance_km,
+            COALESCE(bucket_distance.combustion_distance_km, 0) AS combustion_distance_km,
             bucket_event_stats.session_cost + bucket_event_stats.expense_cost AS total_cost
         FROM bucket_event_stats
         LEFT JOIN bucket_distance ON bucket_distance.bucket_start = bucket_event_stats.bucket_start
@@ -588,6 +602,8 @@ def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
     rows = _fetch_trend_stats(cur, user_id, bucket='month', **kwargs)
     for row in rows:
         row['month'] = row.pop('period')[:7]
+        # Only the petrol comparison reads this, and the dashboard does not run it.
+        row.pop('combustion_distance_km', None)
     return rows
 
 

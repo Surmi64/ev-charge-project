@@ -344,7 +344,7 @@ const AnalyticsReport = ({
           ) : null}
           <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" stroke={brand.warning}
             strokeWidth={2} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
-          {comparison?.available ? (
+          {comparison?.applies ? (
             <Line yAxisId="cost" type="monotone" dataKey="petrol_equivalent_cost" stroke={series[4]}
               strokeWidth={2} strokeDasharray="7 4" dot={false} connectNulls={false} isAnimationActive={false} />
           ) : null}
@@ -355,7 +355,7 @@ const AnalyticsReport = ({
           <span><Swatch color={brand.secondary} />Other costs</span>
           {projectionOn ? <span><Swatch color={theme.tail} />Hatched: projected, not recorded</span> : null}
           <span><Swatch color={brand.warning} />Cost per 100 {fmt.distanceShort}</span>
-          {comparison?.available ? <span><Swatch color={series[4]} />Same distance on petrol</span> : null}
+          {comparison?.applies ? <span><Swatch color={series[4]} />Same distance on petrol</span> : null}
         </p>
 
       </Section>
@@ -373,7 +373,7 @@ const AnalyticsReport = ({
               {projectionOn ? <th className="pr-num">Projected</th> : null}
               <th className="pr-num">Total</th>
               <th className="pr-num">Per 100 {fmt.distanceShort}</th>
-              {comparison?.available ? <th className="pr-num">On petrol</th> : null}
+              {comparison?.applies ? <th className="pr-num">On petrol</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -392,7 +392,7 @@ const AnalyticsReport = ({
                   <td className="pr-num">
                     {row.avg_cost_per_100km != null ? fmt.moneyPerHundred(row.avg_cost_per_100km) : '—'}
                   </td>
-                  {comparison?.available ? (
+                  {comparison?.applies ? (
                     <td className="pr-num">
                       {row.petrol_equivalent_cost != null ? huf(row.petrol_equivalent_cost) : '—'}
                     </td>
@@ -402,7 +402,7 @@ const AnalyticsReport = ({
             })}
           </tbody>
         </table>
-        {comparison?.available ? (
+        {comparison?.applies ? (
           <p className="pr-note">
             Petrol column assumes {fmt.toConsumptionInput(comparison.consumption_l_100km)} {fmt.consumptionLabel}
             {' at '}{fmt.fuelPrice(comparison.fuel_price_per_litre)} {fmt.fuelPriceLabel}
