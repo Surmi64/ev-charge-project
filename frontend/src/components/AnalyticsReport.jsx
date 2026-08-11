@@ -41,11 +41,9 @@ import { StackTopBar } from '../utils/chartShapes';
 import {
   BUCKET_NOUN,
   buildColumns,
-  buildMetrics,
   buildProviderSlices,
   buildTickLabel,
   buildTooltipLabel,
-  rankByMetric,
 } from '../utils/analyticsFormat';
 
 // A4 portrait less the 10 mm side margins the exporter uses, at 96 dpi. Charts are
@@ -198,7 +196,6 @@ const AnalyticsReport = ({
   const categories = data.expense_categories || [];
   const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
   const providers = data.providers || [];
-  const metrics = buildMetrics(fmt);
   const columns = buildColumns(fmt);
 
   const tickLabel = buildTickLabel(trendBucket);
@@ -228,12 +225,6 @@ const AnalyticsReport = ({
     (max, row) => Math.max(max, Number(row.session_cost || 0) + Number(row.expense_cost || 0)), 0,
   );
   const drilldownLabel = segmentLabel(drilldownMax, fmt.moneyCompact);
-
-  // Every metric, not just the one the page happens to be showing: the reader of a PDF
-  // cannot flip the toggle, and the three disagreeing is the point of the section.
-  const rankings = Object.entries(metrics)
-    .map(([key, metric]) => ({ key, metric, rows: rankByMetric(stats, metric) }))
-    .filter((entry) => entry.rows.length > 0);
 
   const generated = new Date().toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' });
 
@@ -413,69 +404,11 @@ const AnalyticsReport = ({
         ) : null}
       </Section>
 
-      {rankings.map(({ key, metric, rows }) => (
-        <Section key={key} title={`Efficiency — ${metric.label}`} note={metric.note}>
-          <table className="pr-table pr-table-full">
-            <thead>
-              <tr>
-                <th className="pr-num">#</th>
-                <th>Vehicle</th>
-                <th>Fuel</th>
-                <th className="pr-num">{metric.label}</th>
-                <th className="pr-num">vs best</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={row.id}>
-                  <td className="pr-num">{index + 1}</td>
-                  <td>{row.name}</td>
-                  <td>{row.fuel_type}</td>
-                  <td className="pr-num">{metric.format(row.value)}</td>
-                  <td className="pr-num">
-                    {index === 0 ? 'best' : `+${Math.round(((row.value / rows[0].value) - 1) * 100)}%`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {stats.length - rows.length > 0 ? (
-            <p className="pr-note">
-              {stats.length - rows.length} vehicle{stats.length - rows.length === 1 ? '' : 's'} left out — no
-              distance{key === 'energy' ? ' or charging' : ''} recorded in this range.
-            </p>
-          ) : null}
-        </Section>
-      ))}
-
-      <Section title="All figures">
-        <table className="pr-table pr-table-full">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col.id} className={col.numeric ? 'pr-num' : undefined}>{col.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {stats.map((vehicle) => (
-              <tr key={vehicle.id}>
-                {columns.map((col) => {
-                  const field = col.sortKey || col.id;
-                  return (
-                    <td key={col.id} className={col.numeric ? 'pr-num' : undefined}>
-                      {field === 'name'
-                        ? `${vehicle.name} (${vehicle.fuel_type})`
-                        : col.format(Number(vehicle[field] || 0))}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Section>
-
+      {/* The rings come before the all-figures table rather than after it. The three
+          efficiency leaderboards used to sit here — every metric written out, since a
+          PDF reader cannot flip the page's toggle — but they said what the table below
+          already says, one row per vehicle, and pushed the only two pictures in the
+          second half of the report onto a page of their own. */}
       <Section title="Where the money goes">
         <table className="pr-table pr-table-full">
           <thead>
@@ -549,6 +482,34 @@ const AnalyticsReport = ({
           </div>
         </Section>
       ) : null}
+
+      <Section title="All figures">
+        <table className="pr-table pr-table-full">
+          <thead>
+            <tr>
+              {columns.map((col) => (
+                <th key={col.id} className={col.numeric ? 'pr-num' : undefined}>{col.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {stats.map((vehicle) => (
+              <tr key={vehicle.id}>
+                {columns.map((col) => {
+                  const field = col.sortKey || col.id;
+                  return (
+                    <td key={col.id} className={col.numeric ? 'pr-num' : undefined}>
+                      {field === 'name'
+                        ? `${vehicle.name} (${vehicle.fuel_type})`
+                        : col.format(Number(vehicle[field] || 0))}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Section>
 
       {drilldown ? (
         <Section title={`Single vehicle — ${drilldown.vehicle?.name || ''}`}
