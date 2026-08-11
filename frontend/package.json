@@ -16,6 +16,8 @@
     "@mui/material": "^7.3.9",
     "@mui/x-date-pickers": "^8.27.2",
     "dayjs": "^1.11.19",
+    "html2canvas-pro": "^1.6.7",
+    "jspdf": "^3.0.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.13.1",

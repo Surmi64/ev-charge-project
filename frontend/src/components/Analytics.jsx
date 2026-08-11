@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Alert,
@@ -58,6 +58,8 @@ import {
 import AnalyticsReport from './AnalyticsReport';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
+import { buildReportTheme } from '../utils/reportTheme';
+import { exportReportToPdf, reportFileName } from '../utils/pdfExport';
 import { pluralize } from '../utils/plural';
 import { AnalyticsSkeleton } from './SectionSkeletons';
 
@@ -171,10 +173,12 @@ const Analytics = () => {
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [drilldown, setDrilldown] = useState(null);
   const [forecast, setForecast] = useState(null);
-  // The printable report is only mounted while an export is running. It is a second
+  // The report is only mounted while an export is running. It is a second
   // rendering of everything on this page, charts included, and there is no reason to
   // pay for it on every visit for the sake of a button most sessions never press.
   const [exporting, setExporting] = useState(false);
+  // The element the exporter rasterises, handed back by the report itself.
+  const reportRef = useRef(null);
 
   // The server decides the bucket from the range; read it back rather than deriving it
   // here, so the axis can never disagree with the data it is labelling. Falls back to
@@ -305,27 +309,44 @@ const Analytics = () => {
   }, [data, forecast, projectionOn]);
 
   /**
-   * Hand the report to the browser's own PDF writer.
+   * Write the report out as a PDF.
    *
-   * No jsPDF, no html2canvas: both would add more weight than the rest of this page
-   * put together, and a canvas snapshot rasterises every number on it. Printing keeps
-   * the charts as vectors and the figures as selectable text, and "Save as PDF" is
-   * already in the dialog on every platform this app runs on.
+   * This was `window.print()` and the browser's own "Save as PDF" — free, and it kept
+   * the text selectable, but the file was whatever the dialog happened to be set to
+   * and the report had to be light-on-white because a print dialog does not know the
+   * account has picked a dark theme. The file is generated now, so it looks the same
+   * on every platform and carries the account's own palette and background.
    *
-   * The print call waits a frame: the report mounts in the same commit as `exporting`,
-   * and window.print() blocks the main thread, so calling it synchronously would
-   * capture the DOM before the charts had rendered into it.
+   * The work waits two frames after the mount: the report renders in the same commit
+   * as `exporting`, and rasterising it in that commit would catch the charts before
+   * Recharts had laid them out. Fonts are waited on for the same reason — the report
+   * measured with a fallback face and drawn with the real one comes out with its
+   * headings clipped.
    */
   useEffect(() => {
     if (!exporting) return undefined;
-    const finish = () => setExporting(false);
-    window.addEventListener('afterprint', finish);
-    const frame = requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
-    return () => {
-      window.removeEventListener('afterprint', finish);
-      cancelAnimationFrame(frame);
+    let cancelled = false;
+
+    const run = async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.fonts?.ready) await document.fonts.ready;
+      if (cancelled || !reportRef.current) return;
+      try {
+        await exportReportToPdf(
+          reportRef.current,
+          buildReportTheme(user?.theme_palette, theme.palette.mode),
+          reportFileName(RANGES.find((r) => r.value === range)?.label),
+        );
+      } catch {
+        toast.error('Could not build the PDF. Try again, or narrow the range.');
+      } finally {
+        if (!cancelled) setExporting(false);
+      }
     };
-  }, [exporting]);
+
+    run();
+    return () => { cancelled = true; };
+  }, [exporting, range, theme.palette.mode, user?.theme_palette]);
 
   const handleSort = (columnId) => {
     if (orderBy === columnId) setOrder(order === 'asc' ? 'desc' : 'asc');
@@ -411,8 +432,8 @@ const Analytics = () => {
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {rangeSelector}
-          {/* Disabled while the dialog is up: a second press would remount the report
-              underneath the one being printed. */}
+          {/* Disabled while a file is being written: a second press would remount the
+              report underneath the one being rasterised. */}
           <Button
             variant="outlined"
             size="small"
@@ -420,7 +441,7 @@ const Analytics = () => {
             disabled={!hasData || exporting}
             onClick={() => setExporting(true)}
           >
-            Export PDF
+            {exporting ? 'Building PDF…' : 'Export PDF'}
           </Button>
         </Stack>
       </Stack>
@@ -859,7 +880,8 @@ const Analytics = () => {
         </>
       )}
 
-      {/* Outside #root, which the print sheet hides — see the print block in App.css. */}
+      {/* On document.body and parked off-screen — see the report block in App.css. It
+          has to be laid out to be rasterised, so it cannot be display: none. */}
       {exporting
         ? createPortal(
           <AnalyticsReport
@@ -874,6 +896,8 @@ const Analytics = () => {
             drilldownBucket={drilldownBucket}
             fmt={fmt}
             user={user}
+            mode={theme.palette.mode}
+            ref={reportRef}
           />,
           document.body,
         )

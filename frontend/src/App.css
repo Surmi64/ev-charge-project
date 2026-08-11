@@ -148,35 +148,40 @@
 .stagger > *:nth-child(5) { animation-delay: 180ms; }
 .stagger > *:nth-child(n + 6) { animation-delay: 210ms; }
 
-/* Printable report (components/AnalyticsReport.jsx)
+/* Exported report (components/AnalyticsReport.jsx, utils/pdfExport.js)
  *
  * The report is mounted into a portal on document.body only while an export is
- * running, and is hidden on screen throughout: the page it duplicates is right
- * behind it, and showing both would be confusing. The print sheet swaps them —
- * #root goes, the report appears — which also keeps the sidebar, the mobile nav
- * and the background washes off the paper without every one of them needing its
- * own print rule.
+ * running, and is never seen on screen: the page it duplicates is right behind it,
+ * and showing both would be confusing. It is parked off-screen rather than hidden,
+ * because the exporter rasterises it and `display: none` measures zero.
  *
- * The layout rules sit outside the media query so they are ordinary styles rather
- * than a second stylesheet to keep in step; only the display swap is print-only.
- * Colours are literal here for the same reason they are literal in the component:
- * the --mileage-* properties follow the account's theme, and a dark one would
- * print as a black page.
+ * This used to be a print stylesheet — #root hidden, the report shown, and the
+ * browser's own dialog writing the file. The colours were therefore locked to the
+ * light set whatever the app was in, since a dark card on white paper is a waste of
+ * a cartridge. The PDF is generated now and read on a screen, so every colour comes
+ * from `--pr-*`, which components/AnalyticsReport.jsx stamps on the root from the
+ * account's palette and mode. The layout below does not vary by theme; only the ink,
+ * the rules and the card surface do.
+ *
+ * Blocks are transparent on purpose. The exporter paints the background wash onto
+ * each page and drops the blocks over it, so a card here is translucent glass in
+ * front of that wash, exactly as Paper is on the page.
  */
-.print-report {
-  display: none;
+.pdf-report {
+  position: absolute;
+  top: 0;
+  left: -10000px;
   width: 700px;
-  margin: 0 auto;
-  color: #101820;
-  background: #fff;
+  color: var(--pr-ink);
   font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 11px;
   line-height: 1.45;
+  pointer-events: none;
 }
 
-.print-report h1,
-.print-report h2,
-.print-report h3 {
+.pdf-report h1,
+.pdf-report h2,
+.pdf-report h3 {
   margin: 0;
   font-family: 'Rajdhani', 'Roboto Condensed', system-ui, sans-serif;
   letter-spacing: 0.02em;
@@ -187,8 +192,8 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
-  padding-bottom: 0.6rem;
-  border-bottom: 2px solid #101820;
+  padding: 0 0.2rem 0.6rem;
+  border-bottom: 2px solid var(--pr-accent);
 }
 
 .pr-h1 { font-size: 24px; font-weight: 800; }
@@ -199,13 +204,13 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  color: #4a5a68;
+  color: var(--pr-muted);
   font-size: 10px;
   text-align: right;
 }
 
 .pr-generated span:first-child {
-  color: #101820;
+  color: var(--pr-ink);
   font-family: 'Rajdhani', system-ui, sans-serif;
   font-size: 14px;
   font-weight: 700;
@@ -213,17 +218,20 @@
   text-transform: uppercase;
 }
 
-/* Each section is one block the printer should not split. A table that spills a
-   single row onto the next page is worse than a page break before it. */
+/* Each section is one card, and one unit of pagination: the exporter places a block
+   whole or moves it to the next page. A table that spills a single row over a page
+   break is worse than a break before the section that holds it. */
 .pr-section {
-  margin-top: 1.1rem;
-  break-inside: avoid;
-  page-break-inside: avoid;
+  /* 14px, the padding CHART_W in the report subtracts to fit a chart inside. */
+  padding: 12px 14px 14px;
+  border: 1px solid var(--pr-card-border);
+  border-radius: 12px;
+  background: var(--pr-card);
 }
 
 .pr-note {
   margin: 0.3rem 0 0.5rem;
-  color: #4a5a68;
+  color: var(--pr-muted);
   font-size: 10px;
 }
 
@@ -238,19 +246,19 @@
   display: flex;
   flex-direction: column;
   padding-left: 0.5rem;
-  border-left: 3px solid #101820;
+  border-left: 3px solid var(--pr-accent);
 }
 
-.pr-figure-label { color: #4a5a68; font-size: 10px; }
+.pr-figure-label { color: var(--pr-muted); font-size: 10px; }
 .pr-figure-value { font-size: 15px; font-variant-numeric: tabular-nums; }
-.pr-figure-hint { color: #78888f; font-size: 9px; }
+.pr-figure-hint { color: var(--pr-faint); font-size: 9px; }
 
 .pr-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.15rem 1rem;
   margin: 0.2rem 0 0.6rem;
-  color: #4a5a68;
+  color: var(--pr-muted);
   font-size: 10px;
 }
 
@@ -273,13 +281,13 @@
 .pr-table th,
 .pr-table td {
   padding: 3px 6px;
-  border-bottom: 1px solid #e2e9ee;
+  border-bottom: 1px solid var(--pr-rule-soft);
   text-align: left;
 }
 
 .pr-table th {
-  border-bottom: 1px solid #c9d4dc;
-  color: #4a5a68;
+  border-bottom: 1px solid var(--pr-rule);
+  color: var(--pr-muted);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -291,7 +299,7 @@
 }
 
 /* The estimated column reads as an estimate without the hatch the chart can use. */
-.pr-estimate { color: #4a5a68; font-style: italic; }
+.pr-estimate { color: var(--pr-muted); font-style: italic; }
 
 .pr-pie-row {
   display: flex;
@@ -310,34 +318,8 @@
 }
 
 .pr-footer {
-  margin-top: 1.2rem;
-  padding-top: 0.4rem;
-  border-top: 1px solid #c9d4dc;
-  color: #78888f;
+  padding: 0.4rem 0.2rem 0;
+  border-top: 1px solid var(--pr-rule);
+  color: var(--pr-faint);
   font-size: 9px;
-}
-
-@media print {
-  @page {
-    size: A4 portrait;
-    margin: 12mm 10mm;
-  }
-
-  html,
-  body {
-    background: #fff !important;
-    padding: 0 !important;
-  }
-
-  #root { display: none !important; }
-
-  .print-report { display: block !important; }
-
-  /* Bar fills, pie slices and swatches are the data here, not decoration — the
-     browser's default of dropping backgrounds would take the chart with them. */
-  .print-report,
-  .print-report * {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
 }

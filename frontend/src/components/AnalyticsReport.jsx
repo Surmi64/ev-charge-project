@@ -1,22 +1,26 @@
 /**
- * The printable version of Analytics.
+ * The exported version of Analytics.
  *
  * The page is built for a pointer: half its numbers live in tooltips, and a tooltip
- * does not survive being printed. So this is a second rendering of the same data with
+ * does not survive being exported. So this is a second rendering of the same data with
  * every hidden figure made explicit — values written onto the bars themselves, and a
  * table under each chart carrying exactly what its tooltip would have said. Nothing is
  * recomputed here that the page computes for itself; the shared helpers in
  * utils/analyticsFormat.js are the single source for both.
  *
- * It renders into a portal on document.body and is `display: none` until the print
- * stylesheet in App.css turns it on, at which point #root is hidden instead. That is
- * also why the charts carry fixed pixel sizes rather than a ResponsiveContainer: a
- * hidden element measures zero, and a chart sized from the print sheet cannot depend
- * on the window it was never laid out in.
+ * It renders into a portal on document.body, parked off-screen rather than hidden:
+ * utils/pdfExport.js rasterises it block by block, and an element with no layout
+ * rasterises empty. That is also why the charts carry fixed pixel sizes rather than a
+ * ResponsiveContainer — the page is A4, so the width is known in advance and does not
+ * depend on the window.
  *
- * Colours are always the light set, whatever mode the app is in. The dark hues are
- * measured against a near-black surface and print as pale marks on white paper, and
- * a dark card background would cost the reader a cartridge to say nothing.
+ * Colours follow the account: utils/reportTheme.js resolves the same palette and the
+ * same light/dark mode the app is in, and the PDF carries the same washed background
+ * the page does. That is only possible because the file is generated rather than sent
+ * through the browser's print dialog, which would have put a dark card on white paper.
+ *
+ * Every block the exporter can page-break between carries `data-pdf-block`. A block is
+ * placed whole or moved to the next page, so a section is never split across two.
  */
 import React from 'react';
 import {
@@ -31,10 +35,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { DEFAULT_PALETTE, isPaletteId, resolveBrand, resolveSeries } from '../utils/palette';
+import { buildReportTheme, reportCssVars } from '../utils/reportTheme';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { StackTopBar } from '../utils/chartShapes';
 import {
+  BUCKET_NOUN,
   buildColumns,
   buildMetrics,
   buildProviderSlices,
@@ -43,24 +48,23 @@ import {
   rankByMetric,
 } from '../utils/analyticsFormat';
 
-// A4 portrait less the 10 mm side margins in App.css, at the 96 dpi the print box is
-// laid out in. Charts are drawn at this width and never scaled, so the label sizes
-// below are the sizes that reach the paper.
-const CHART_W = 700;
+// A4 portrait less the 10 mm side margins the exporter uses, at 96 dpi. Charts are
+// drawn at this width and scaled once, uniformly, onto the page — so the label sizes
+// below keep their proportions in the file.
+//
+// A chart sits inside a card, so it gets the report width less that card's padding
+// and border. Drawn at the full width it overflowed by exactly the padding, and the
+// rasteriser cut the last column off at the card's edge.
+//
+// The rings are drawn well inside their box because their share labels sit outside
+// the ring and an SVG clips at its own edge — at a radius that filled the box, "67%"
+// lost its top row of pixels and "12%" printed as "1".
+const REPORT_W = 700;
+const CARD_PAD = 14;
+const CHART_W = REPORT_W - (CARD_PAD + 1) * 2;
 const TREND_H = 300;
 const DRILLDOWN_H = 240;
 const PIE_SIZE = 170;
-
-// Ink. Deliberately not from the theme: the report is printed, and the theme's
-// surfaces and text colours are chosen for a screen the reader is not looking at.
-const INK = '#101820';
-const INK_MUTED = '#4a5a68';
-const RULE = '#c9d4dc';
-const TAIL_GREY = '#9aa8b4';
-const UNNAMED_GREY = '#c2ccd4';
-// Label ink on a filled bar, matching ON_BRAND.light — every light hue was measured
-// against it.
-const ON_FILL = '#F7FBFC';
 
 /**
  * A segment is only labelled when there is room for the label to sit inside it.
@@ -87,14 +91,14 @@ const segmentLabel = (max, format) => (value) => {
  * formatter. It hangs off the topmost bar in the stack, whose `y` is the top of the
  * whole column even on rows where that series happens to be zero.
  */
-const StackTotalLabel = ({ x, y, width, index, rows = [], keys = [], format }) => {
+const StackTotalLabel = ({ x, y, width, index, rows = [], keys = [], format, fill }) => {
   const row = rows[index];
   if (!row) return null;
   const total = keys.reduce((sum, key) => sum + Number(row[key] || 0), 0);
   if (!total) return null;
   return (
     <text x={Number(x) + Number(width) / 2} y={Number(y) - 5} textAnchor="middle"
-      fontSize={10} fontWeight={700} fill={INK}>
+      fontSize={10} fontWeight={700} fill={fill}>
       {format(Math.round(total))}
     </text>
   );
@@ -111,7 +115,7 @@ const Figure = ({ label, value, hint, color }) => (
 );
 
 const Section = ({ title, note, children }) => (
-  <section className="pr-section">
+  <section className="pr-section" data-pdf-block>
     <h2 className="pr-h2">{title}</h2>
     {note ? <p className="pr-note">{note}</p> : null}
     {children}
@@ -127,7 +131,7 @@ const Swatch = ({ color }) => <span className="pr-swatch" style={{ backgroundCol
  * fit in a one-record slice — so the table is where the reader gets the numbers the
  * screen puts in a tooltip.
  */
-const ProviderBlock = ({ title, slices, valueHeader, formatValue, formatRate, empty }) => {
+const ProviderBlock = ({ title, slices, valueHeader, formatValue, formatRate, empty, theme }) => {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0) || 1;
   if (!slices.length) return <div><h3 className="pr-h3">{title}</h3><p className="pr-note">{empty}</p></div>;
   return (
@@ -136,9 +140,9 @@ const ProviderBlock = ({ title, slices, valueHeader, formatValue, formatRate, em
       <div className="pr-pie-row">
         <PieChart width={PIE_SIZE} height={PIE_SIZE}>
           <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="50%"
-            innerRadius={42} outerRadius={68} paddingAngle={3} stroke="#ffffff" strokeWidth={2}
+            innerRadius={34} outerRadius={54} paddingAngle={3} stroke={theme.cardSolid} strokeWidth={2}
             isAnimationActive={false} labelLine={false} label={pieShare}
-            fontSize={10} fill={INK}>
+            fontSize={10} fill={theme.ink}>
             {slices.map((slice) => <Cell key={slice.key} fill={slice.color} />)}
           </Pie>
         </PieChart>
@@ -181,10 +185,11 @@ const AnalyticsReport = ({
   drilldownBucket,
   fmt,
   user,
+  mode,
+  ref,
 }) => {
-  const paletteId = isPaletteId(user?.theme_palette) ? user.theme_palette : DEFAULT_PALETTE;
-  const brand = resolveBrand(paletteId, 'light');
-  const series = resolveSeries(paletteId, 'light');
+  const theme = buildReportTheme(user?.theme_palette, mode);
+  const { brand, series, ink, inkMuted, onFill } = theme;
   const huf = fmt.money;
   const compact = fmt.numberCompact;
 
@@ -204,7 +209,7 @@ const AnalyticsReport = ({
   const providerColors = new Map(
     providers.filter((p) => p.provider).map((p, index) => [p.provider, series[index % series.length]]),
   );
-  const sliceColors = { tailColor: TAIL_GREY, unnamedColor: UNNAMED_GREY };
+  const sliceColors = { tailColor: theme.tail, unnamedColor: theme.unnamed };
   const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, sliceColors);
   const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, sliceColors);
 
@@ -233,8 +238,8 @@ const AnalyticsReport = ({
   const generated = new Date().toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' });
 
   return (
-    <div className="print-report" role="document" aria-hidden="true">
-      <header className="pr-header">
+    <div className="pdf-report" role="document" aria-hidden="true" ref={ref} style={reportCssVars(theme)}>
+      <header className="pr-header" data-pdf-block>
         <div>
           <h1 className="pr-h1">Analytics report</h1>
           <p className="pr-note">
@@ -276,40 +281,47 @@ const AnalyticsReport = ({
       >
         <ComposedChart width={CHART_W} height={TREND_H} data={chartData} margin={{ top: 22, left: 4, right: 8 }}>
           {/* The same hatch the screen uses, so an estimated column reads as one here
-              too — on paper the colour difference alone would not survive a greyscale
-              printer. */}
+              too — colour alone would not carry it for a reader who prints the file
+              on a greyscale printer. The gaps are the card's own solid colour rather
+              than transparent: the background wash showing through a bar would read
+              as part of the data. */}
           <defs>
             <pattern id="pr-projectedDriving" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-              <rect width="7" height="7" fill="#ffffff" />
+              <rect width="7" height="7" fill={theme.cardSolid} />
               <line x1="0" y1="0" x2="0" y2="7" stroke={brand.primary} strokeWidth="2.5" />
             </pattern>
             <pattern id="pr-projectedOther" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-              <rect width="7" height="7" fill="#ffffff" />
+              <rect width="7" height="7" fill={theme.cardSolid} />
               <line x1="0" y1="0" x2="0" y2="7" stroke={brand.secondary} strokeWidth="2.5" />
             </pattern>
           </defs>
-          <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={RULE} />
+          <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.rule} />
+          {/* Every column labelled while they fit — the paper is fixed, so this can be
+              decided from the count rather than measured. A daily range runs to thirty
+              buckets, where a tick per column would print as a grey smear; the table
+              below names every period regardless. */}
           <XAxis dataKey="period" tickFormatter={tickLabel} axisLine={false} tickLine={false}
-            interval={0} tick={{ fill: INK_MUTED, fontSize: 10 }} />
+            interval={chartData.length > 16 ? 'preserveStartEnd' : 0} minTickGap={12}
+            tick={{ fill: inkMuted, fontSize: 10 }} />
           <YAxis yAxisId="cost" tickFormatter={compact} axisLine={false} tickLine={false} width={46}
-            tick={{ fill: INK_MUTED, fontSize: 10 }} />
+            tick={{ fill: inkMuted, fontSize: 10 }} />
           <YAxis yAxisId="eff" orientation="right" tickFormatter={compact} axisLine={false} tickLine={false}
-            width={46} tick={{ fill: INK_MUTED, fontSize: 10 }} />
+            width={46} tick={{ fill: inkMuted, fontSize: 10 }} />
           <Bar yAxisId="cost" dataKey="session_cost" stackId="cost" fill={brand.primary}
             shape={<StackTopBar above={['expense_cost', 'projected_session_cost', 'projected_expense_cost']} />}
             isAnimationActive={false}>
             <LabelList dataKey="session_cost" position="center" formatter={barLabel}
-              fill={ON_FILL} fontSize={9} fontWeight={700} />
+              fill={onFill} fontSize={9} fontWeight={700} />
           </Bar>
           <Bar yAxisId="cost" dataKey="expense_cost" stackId="cost" fill={brand.secondary}
             shape={<StackTopBar above={['projected_session_cost', 'projected_expense_cost']} />}
             isAnimationActive={false}>
             <LabelList dataKey="expense_cost" position="center" formatter={barLabel}
-              fill={ON_FILL} fontSize={9} fontWeight={700} />
+              fill={onFill} fontSize={9} fontWeight={700} />
             {/* The total rides on whichever series is topmost, which is this one until
                 a projection is stacked over it. */}
             {!projectionOn ? (
-              <LabelList content={<StackTotalLabel rows={chartData} keys={trendKeys} format={fmt.moneyCompact} />} />
+              <LabelList content={<StackTotalLabel rows={chartData} keys={trendKeys} format={fmt.moneyCompact} fill={ink} />} />
             ) : null}
           </Bar>
           {projectionOn ? (
@@ -317,7 +329,7 @@ const AnalyticsReport = ({
               fill="url(#pr-projectedDriving)" stroke={brand.primary} strokeDasharray="4 3"
               shape={<StackTopBar above={['projected_expense_cost']} />} isAnimationActive={false}>
               <LabelList dataKey="projected_session_cost" position="center" formatter={barLabel}
-                fill={INK} fontSize={9} fontWeight={700} />
+                fill={ink} fontSize={9} fontWeight={700} />
             </Bar>
           ) : null}
           {projectionOn ? (
@@ -325,8 +337,8 @@ const AnalyticsReport = ({
               fill="url(#pr-projectedOther)" stroke={brand.secondary} strokeDasharray="4 3"
               shape={<StackTopBar />} isAnimationActive={false}>
               <LabelList dataKey="projected_expense_cost" position="center" formatter={barLabel}
-                fill={INK} fontSize={9} fontWeight={700} />
-              <LabelList content={<StackTotalLabel rows={chartData} keys={trendKeys} format={fmt.moneyCompact} />} />
+                fill={ink} fontSize={9} fontWeight={700} />
+              <LabelList content={<StackTotalLabel rows={chartData} keys={trendKeys} format={fmt.moneyCompact} fill={ink} />} />
             </Bar>
           ) : null}
           <Line yAxisId="eff" type="monotone" dataKey="avg_cost_per_100km" stroke={brand.warning}
@@ -340,12 +352,17 @@ const AnalyticsReport = ({
         <p className="pr-legend">
           <span><Swatch color={brand.primary} />Driving spend</span>
           <span><Swatch color={brand.secondary} />Other costs</span>
-          {projectionOn ? <span><Swatch color={TAIL_GREY} />Hatched: projected, not recorded</span> : null}
+          {projectionOn ? <span><Swatch color={theme.tail} />Hatched: projected, not recorded</span> : null}
           <span><Swatch color={brand.warning} />Cost per 100 {fmt.distanceShort}</span>
           {comparison?.available ? <span><Swatch color={series[4]} />Same distance on petrol</span> : null}
         </p>
 
-        {/* The tooltip, unrolled. Every column the chart would only reveal on hover. */}
+      </Section>
+
+      {/* The tooltip, unrolled — and a card of its own, because a chart and a table of
+          every period together are taller than a page can hold beside anything else,
+          which left the summary sharing a page with nothing but white. */}
+      <Section title={`Cost over time — every ${BUCKET_NOUN[trendBucket] || 'month'}`}>
         <table className="pr-table pr-table-full">
           <thead>
             <tr>
@@ -486,8 +503,8 @@ const AnalyticsReport = ({
           <div className="pr-pie-row">
             <PieChart width={PIE_SIZE} height={PIE_SIZE}>
               <Pie data={categories} dataKey="total_amount" nameKey="category" cx="50%" cy="50%"
-                innerRadius={42} outerRadius={68} paddingAngle={3} stroke="#ffffff" strokeWidth={2}
-                isAnimationActive={false} labelLine={false} label={pieShare} fontSize={10} fill={INK}>
+                innerRadius={34} outerRadius={54} paddingAngle={3} stroke={theme.cardSolid} strokeWidth={2}
+                isAnimationActive={false} labelLine={false} label={pieShare} fontSize={10} fill={ink}>
                 {categories.map((entry, index) => (
                   <Cell key={entry.category} fill={series[index % series.length]} />
                 ))}
@@ -524,10 +541,11 @@ const AnalyticsReport = ({
           note="How often you stop where, and how much energy you take there.">
           <div className="pr-provider-stack">
             <ProviderBlock title="Stops" slices={stopsSlices} valueHeader="Records"
-              formatValue={(value) => `${value}`} empty="No charging or fuel records in this range." />
+              formatValue={(value) => `${value}`} empty="No charging or fuel records in this range."
+              theme={theme} />
             <ProviderBlock title="Energy" slices={energySlices} valueHeader="Energy"
               formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
-              empty="No charging with a recorded kWh figure in this range." />
+              empty="No charging with a recorded kWh figure in this range." theme={theme} />
           </div>
         </Section>
       ) : null}
@@ -543,26 +561,32 @@ const AnalyticsReport = ({
             <Figure label="Records" value={String(drilldown.summary?.total_records || 0)} color={brand.success} />
           </div>
           <ComposedChart width={CHART_W} height={DRILLDOWN_H} data={drilldownRows} margin={{ top: 22, left: 4, right: 8 }}>
-            <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={RULE} />
+            <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.rule} />
             <XAxis dataKey="period" tickFormatter={drilldownTick} axisLine={false} tickLine={false}
-              interval={0} tick={{ fill: INK_MUTED, fontSize: 10 }} />
+              interval={drilldownRows.length > 16 ? 'preserveStartEnd' : 0} minTickGap={12}
+              tick={{ fill: inkMuted, fontSize: 10 }} />
             <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={46}
-              tick={{ fill: INK_MUTED, fontSize: 10 }} />
+              tick={{ fill: inkMuted, fontSize: 10 }} />
             <Bar dataKey="session_cost" stackId="cost" fill={brand.primary}
               shape={<StackTopBar above={['expense_cost']} />} isAnimationActive={false}>
               <LabelList dataKey="session_cost" position="center" formatter={drilldownLabel}
-                fill={ON_FILL} fontSize={9} fontWeight={700} />
+                fill={onFill} fontSize={9} fontWeight={700} />
             </Bar>
             <Bar dataKey="expense_cost" stackId="cost" fill={brand.secondary}
               shape={<StackTopBar />} isAnimationActive={false}>
               <LabelList dataKey="expense_cost" position="center" formatter={drilldownLabel}
-                fill={ON_FILL} fontSize={9} fontWeight={700} />
+                fill={onFill} fontSize={9} fontWeight={700} />
               <LabelList content={(
                 <StackTotalLabel rows={drilldownRows} keys={['session_cost', 'expense_cost']}
-                  format={fmt.moneyCompact} />
+                  format={fmt.moneyCompact} fill={ink} />
               )} />
             </Bar>
           </ComposedChart>
+        </Section>
+      ) : null}
+
+      {drilldown ? (
+        <Section title={`${drilldown.vehicle?.name || 'Vehicle'} — every ${BUCKET_NOUN[drilldownBucket] || 'month'}`}>
           <table className="pr-table pr-table-full">
             <thead>
               <tr>
@@ -588,7 +612,7 @@ const AnalyticsReport = ({
         </Section>
       ) : null}
 
-      <footer className="pr-footer">
+      <footer className="pr-footer" data-pdf-block>
         Generated by Mileage · {generated} · Amounts are as entered; the currency is a label, not a conversion.
       </footer>
     </div>
