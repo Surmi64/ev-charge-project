@@ -15,10 +15,10 @@
  * have given back.
  *
  * Pagination works on blocks, not pixels. Each `[data-pdf-block]` — the header, each
- * section, the footer — is rasterised on its own and placed whole if it fits on what
- * is left of the page, or moved to the next one if it does not. A block taller than a
- * whole page (the all-figures table on a large fleet) is the only one that gets cut,
- * and then only across its own rows.
+ * section, the footer — is rasterised on its own, and `paginate` below then decides
+ * which page each one lands on so that as little of the paper as possible is left
+ * empty. A block taller than a whole page (the all-figures table on a large fleet) is
+ * the only one that gets cut, and then only across its own rows.
  */
 // A4 portrait in millimetres, and the margins the content sits inside.
 const PAGE_W = 210;
@@ -112,7 +112,7 @@ const mixToward = (hex, other, weight) => {
 };
 
 /** One block's raster, plus the height it will occupy on the page in millimetres. */
-async function rasterise(html2canvas, element) {
+async function rasterise(html2canvas, element, index) {
   const canvas = await html2canvas(element, {
     scale: SCALE,
     // The wash is already on the page underneath; a block that painted its own
@@ -121,7 +121,87 @@ async function rasterise(html2canvas, element) {
     logging: false,
     useCORS: true,
   });
-  return { canvas, mmPerPx: CONTENT_W / canvas.width };
+  const mmPerPx = CONTENT_W / canvas.width;
+  return {
+    canvas,
+    mmPerPx,
+    index,
+    height: canvas.height * mmPerPx,
+    role: element.dataset.pdfBlock || 'flow',
+  };
+}
+
+/**
+ * Which block goes on which page, with as little of the paper left empty as possible.
+ *
+ * Document order wastes a great deal of it: the summary is short, the section after it
+ * is not, and a block that does not fit takes the whole rest of the page with it. So
+ * the blocks that may move do.
+ *
+ * `fixed` blocks — the header, the summary, the cost-over-time pair — are laid down
+ * first, in order. The opening of the report is an argument, what everything cost and
+ * then how that ran over time, and shuffling it would cost the reader more than the
+ * white space did. They leave holes behind them.
+ *
+ * Everything else is reference material and gets packed into those holes: tallest
+ * first, into the earliest page it still fits on, a new page only when none of the
+ * open ones will take it. Tallest-first matters — a short block placed early eats a
+ * hole only a tall one could have used — and filling *every* open page rather than
+ * only the last is what closes the gap the fixed prefix leaves on page one. The
+ * footer goes after all of them.
+ *
+ * The order *within* a page is then put back to document order. Packing decides which
+ * blocks share a page; it has no business deciding what the reader meets first, and
+ * restoring the order costs nothing, because the heights are already settled.
+ *
+ * A block taller than a whole page cannot be packed at all. It gets a page to itself
+ * and is sliced at render time, which is only ever the all-figures table on a fleet
+ * large enough to run past 273 mm.
+ */
+function paginate(rasters) {
+  const pages = [];
+  const newPage = () => {
+    const page = { entries: [], used: 0 };
+    pages.push(page);
+    return page;
+  };
+  const room = (page) => USABLE_H - page.used - (page.entries.length ? BLOCK_GAP : 0);
+  const add = (page, raster) => {
+    page.used += raster.height + (page.entries.length ? BLOCK_GAP : 0);
+    page.entries.push(raster);
+  };
+
+  let current = newPage();
+  for (const raster of rasters.filter((r) => r.role === 'fixed')) {
+    if (raster.height > USABLE_H) {
+      add(newPage(), raster);
+      current = newPage();
+      continue;
+    }
+    if (raster.height > room(current)) current = newPage();
+    add(current, raster);
+  }
+
+  const queue = rasters
+    .filter((r) => r.role !== 'fixed' && r.role !== 'last')
+    .sort((a, b) => b.height - a.height || a.index - b.index);
+  for (const raster of queue) {
+    // An oversize block cannot share a page, and room() on the page it gets is
+    // negative, so nothing later joins it either.
+    const target = raster.height > USABLE_H
+      ? newPage()
+      : pages.find((page) => raster.height <= room(page)) || newPage();
+    add(target, raster);
+  }
+
+  for (const raster of rasters.filter((r) => r.role === 'last')) {
+    const tail = pages[pages.length - 1];
+    add(tail && raster.height <= room(tail) ? tail : newPage(), raster);
+  }
+
+  return pages
+    .filter((page) => page.entries.length)
+    .map((page) => page.entries.sort((a, b) => a.index - b.index));
 }
 
 /** A horizontal band of a canvas, as its own image. Used only to split tall blocks. */
@@ -153,10 +233,10 @@ export async function exportReportToPdf(root, theme, fileName) {
   ]);
 
   const rasters = [];
-  for (const block of blocks) {
+  for (const [index, block] of blocks.entries()) {
     // Sequentially: html2canvas clones the document for each call, and running a
     // dozen of those at once on a page this size is how the tab runs out of memory.
-    rasters.push(await rasterise(html2canvas, block));
+    rasters.push(await rasterise(html2canvas, block, index));
   }
 
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
@@ -171,29 +251,27 @@ export async function exportReportToPdf(root, theme, fileName) {
     cursor = MARGIN_TOP;
   };
 
-  startPage();
+  for (const entries of paginate(rasters)) {
+    startPage();
+    for (const { canvas, mmPerPx, height } of entries) {
+      if (height <= USABLE_H) {
+        doc.addImage(canvas.toDataURL('image/png'), 'PNG', MARGIN_X, cursor, CONTENT_W, height);
+        cursor += height + BLOCK_GAP;
+        continue;
+      }
 
-  for (const { canvas, mmPerPx } of rasters) {
-    const height = canvas.height * mmPerPx;
-
-    if (height <= USABLE_H) {
-      if (cursor + height > PAGE_H - MARGIN_BOTTOM) startPage();
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', MARGIN_X, cursor, CONTENT_W, height);
-      cursor += height + BLOCK_GAP;
-      continue;
-    }
-
-    // Taller than a page on its own. Cut it into page-sized bands, starting on a
-    // fresh page so the first cut is not made worse by whatever came before it.
-    if (cursor > MARGIN_TOP) startPage();
-    let top = 0;
-    while (top < canvas.height) {
-      const available = PAGE_H - MARGIN_BOTTOM - cursor;
-      const bandPx = Math.min(canvas.height - top, Math.floor(available / mmPerPx));
-      doc.addImage(sliceOf(canvas, top, bandPx), 'PNG', MARGIN_X, cursor, CONTENT_W, bandPx * mmPerPx);
-      top += bandPx;
-      if (top < canvas.height) startPage();
-      else cursor += bandPx * mmPerPx + BLOCK_GAP;
+      // The one case pagination could not solve: taller than a page on its own, so it
+      // is cut into page-sized bands. It has the page to itself, hence no cursor to
+      // respect on the first band.
+      let top = 0;
+      while (top < canvas.height) {
+        const available = PAGE_H - MARGIN_BOTTOM - cursor;
+        const bandPx = Math.min(canvas.height - top, Math.floor(available / mmPerPx));
+        doc.addImage(sliceOf(canvas, top, bandPx), 'PNG', MARGIN_X, cursor, CONTENT_W, bandPx * mmPerPx);
+        top += bandPx;
+        if (top < canvas.height) startPage();
+        else cursor += bandPx * mmPerPx + BLOCK_GAP;
+      }
     }
   }
 

@@ -309,14 +309,6 @@
 
 .pr-pie-row .pr-table { flex: 1; }
 
-/* One ring per row rather than two across: the energy table carries four columns
-   and had nowhere to put them beside a ring in half the page width. */
-.pr-provider-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
 .pr-footer {
   padding: 0.4rem 0.2rem 0;
   border-top: 1px solid var(--pr-rule);

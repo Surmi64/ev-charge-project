@@ -19,8 +19,12 @@
  * the page does. That is only possible because the file is generated rather than sent
  * through the browser's print dialog, which would have put a dark card on white paper.
  *
- * Every block the exporter can page-break between carries `data-pdf-block`. A block is
- * placed whole or moved to the next page, so a section is never split across two.
+ * Every block the exporter can page-break between carries `data-pdf-block`, and a
+ * block is placed whole rather than split. `fixed` holds a block in document order —
+ * the header, the summary and the cost-over-time pair; `flow` lets the exporter move
+ * it to whichever page it fills best, which is why the sections below the trend are
+ * written to stand on their own. `last` is the footer, which is placed after
+ * everything else wherever there is room.
  */
 import React from 'react';
 import {
@@ -112,8 +116,15 @@ const Figure = ({ label, value, hint, color }) => (
   </div>
 );
 
-const Section = ({ title, note, children }) => (
-  <section className="pr-section" data-pdf-block>
+/**
+ * `fixed` opts a section out of the exporter's packing pass: it keeps its place in
+ * the document order instead of being moved to whichever page it fills best. The
+ * opening of the report is an argument — what everything cost, then how that ran over
+ * time — and a reader who has to hunt for the summary has lost more than the packer
+ * saved. Everything after it is reference material and can land anywhere.
+ */
+const Section = ({ title, note, children, fixed }) => (
+  <section className="pr-section" data-pdf-block={fixed ? 'fixed' : 'flow'}>
     <h2 className="pr-h2">{title}</h2>
     {note ? <p className="pr-note">{note}</p> : null}
     {children}
@@ -127,46 +138,44 @@ const Swatch = ({ color }) => <span className="pr-swatch" style={{ backgroundCol
  *
  * The ring only carries percentages — provider names run to "MOL Plugee" and will not
  * fit in a one-record slice — so the table is where the reader gets the numbers the
- * screen puts in a tooltip.
+ * screen puts in a tooltip. The heading is the section's, not this component's: each
+ * ring is its own section now.
  */
-const ProviderBlock = ({ title, slices, valueHeader, formatValue, formatRate, empty, theme }) => {
+const ProviderBlock = ({ slices, valueHeader, formatValue, formatRate, empty, theme }) => {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0) || 1;
-  if (!slices.length) return <div><h3 className="pr-h3">{title}</h3><p className="pr-note">{empty}</p></div>;
+  if (!slices.length) return <p className="pr-note">{empty}</p>;
   return (
-    <div>
-      <h3 className="pr-h3">{title}</h3>
-      <div className="pr-pie-row">
-        <PieChart width={PIE_SIZE} height={PIE_SIZE}>
-          <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="50%"
-            innerRadius={34} outerRadius={54} paddingAngle={3} stroke={theme.cardSolid} strokeWidth={2}
-            isAnimationActive={false} labelLine={false} label={pieShare}
-            fontSize={10} fill={theme.ink}>
-            {slices.map((slice) => <Cell key={slice.key} fill={slice.color} />)}
-          </Pie>
-        </PieChart>
-        <table className="pr-table">
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th className="pr-num">{valueHeader}</th>
-              <th className="pr-num">Share</th>
-              {formatRate ? <th className="pr-num">Avg rate</th> : null}
+    <div className="pr-pie-row">
+      <PieChart width={PIE_SIZE} height={PIE_SIZE}>
+        <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="50%"
+          innerRadius={34} outerRadius={54} paddingAngle={3} stroke={theme.cardSolid} strokeWidth={2}
+          isAnimationActive={false} labelLine={false} label={pieShare}
+          fontSize={10} fill={theme.ink}>
+          {slices.map((slice) => <Cell key={slice.key} fill={slice.color} />)}
+        </Pie>
+      </PieChart>
+      <table className="pr-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th className="pr-num">{valueHeader}</th>
+            <th className="pr-num">Share</th>
+            {formatRate ? <th className="pr-num">Avg rate</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {slices.map((slice) => (
+            <tr key={slice.key}>
+              <td><Swatch color={slice.color} />{slice.name}</td>
+              <td className="pr-num">{formatValue(slice.value)}</td>
+              <td className="pr-num">{Math.round((slice.value / total) * 100)}%</td>
+              {formatRate ? (
+                <td className="pr-num">{slice.rate != null ? formatRate(slice.rate) : '—'}</td>
+              ) : null}
             </tr>
-          </thead>
-          <tbody>
-            {slices.map((slice) => (
-              <tr key={slice.key}>
-                <td><Swatch color={slice.color} />{slice.name}</td>
-                <td className="pr-num">{formatValue(slice.value)}</td>
-                <td className="pr-num">{Math.round((slice.value / total) * 100)}%</td>
-                {formatRate ? (
-                  <td className="pr-num">{slice.rate != null ? formatRate(slice.rate) : '—'}</td>
-                ) : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
@@ -230,7 +239,7 @@ const AnalyticsReport = ({
 
   return (
     <div className="pdf-report" role="document" aria-hidden="true" ref={ref} style={reportCssVars(theme)}>
-      <header className="pr-header" data-pdf-block>
+      <header className="pr-header" data-pdf-block="fixed">
         <div>
           <h1 className="pr-h1">Analytics report</h1>
           <p className="pr-note">
@@ -243,7 +252,7 @@ const AnalyticsReport = ({
         </div>
       </header>
 
-      <Section title="Summary">
+      <Section title="Summary" fixed>
         <div className="pr-figures">
           <Figure label="Total cost" value={huf(summary.total_operating_cost)} hint={rangeLabel}
             color={brand.secondary} />
@@ -267,6 +276,7 @@ const AnalyticsReport = ({
       </Section>
 
       <Section
+        fixed
         title="Cost over time"
         note={`Bars are spend, the line is cost per 100 ${fmt.distanceShort}. Figures above each column are the total for that period.`}
       >
@@ -353,7 +363,7 @@ const AnalyticsReport = ({
       {/* The tooltip, unrolled — and a card of its own, because a chart and a table of
           every period together are taller than a page can hold beside anything else,
           which left the summary sharing a page with nothing but white. */}
-      <Section title={`Cost over time — every ${BUCKET_NOUN[trendBucket] || 'month'}`}>
+      <Section fixed title={`Cost over time — every ${BUCKET_NOUN[trendBucket] || 'month'}`}>
         <table className="pr-table pr-table-full">
           <thead>
             <tr>
@@ -432,6 +442,9 @@ const AnalyticsReport = ({
           </tbody>
         </table>
 
+      </Section>
+
+      <Section title="Cost categories">
         {categories.length ? (
           <div className="pr-pie-row">
             <PieChart width={PIE_SIZE} height={PIE_SIZE}>
@@ -469,17 +482,23 @@ const AnalyticsReport = ({
         )}
       </Section>
 
+      {/* One ring per section rather than both in one. Every section is a unit of
+          pagination, so a section is also the size of hole the packer can fill: two
+          rings in one card is 110 mm that has to land somewhere whole, and the page
+          it did not fit on kept the gap. */}
       {providers.length ? (
-        <Section title="Providers"
-          note="How often you stop where, and how much energy you take there.">
-          <div className="pr-provider-stack">
-            <ProviderBlock title="Stops" slices={stopsSlices} valueHeader="Records"
-              formatValue={(value) => `${value}`} empty="No charging or fuel records in this range."
-              theme={theme} />
-            <ProviderBlock title="Energy" slices={energySlices} valueHeader="Energy"
-              formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
-              empty="No charging with a recorded kWh figure in this range." theme={theme} />
-          </div>
+        <Section title="Providers — stops" note="How often you stop where.">
+          <ProviderBlock slices={stopsSlices} valueHeader="Records"
+            formatValue={(value) => `${value}`} empty="No charging or fuel records in this range."
+            theme={theme} />
+        </Section>
+      ) : null}
+
+      {providers.length ? (
+        <Section title="Providers — energy" note="And how much energy you take there.">
+          <ProviderBlock slices={energySlices} valueHeader="Energy"
+            formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
+            empty="No charging with a recorded kWh figure in this range." theme={theme} />
         </Section>
       ) : null}
 
@@ -573,7 +592,7 @@ const AnalyticsReport = ({
         </Section>
       ) : null}
 
-      <footer className="pr-footer" data-pdf-block>
+      <footer className="pr-footer" data-pdf-block="last">
         Generated by Mileage · {generated} · Amounts are as entered; the currency is a label, not a conversion.
       </footer>
     </div>
