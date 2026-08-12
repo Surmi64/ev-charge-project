@@ -534,8 +534,12 @@ const AnalyticsReport = ({
                   const field = col.sortKey || col.id;
                   return (
                     <td key={col.id} className={col.numeric ? 'pr-num' : undefined}>
+                      {/* A sold car only reaches this table when it was asked for by
+                          name, and its figures cover the part of the range it was still
+                          owned for — so the row has to say so, or a part-year total
+                          reads as a full one. */}
                       {field === 'name'
-                        ? `${vehicle.name} (${vehicle.fuel_type})`
+                        ? `${vehicle.name} (${vehicle.fuel_type})${vehicle.is_archived ? ' — sold' : ''}`
                         : col.format(Number(vehicle[field] || 0))}
                     </td>
                   );

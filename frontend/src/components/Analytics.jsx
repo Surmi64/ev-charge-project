@@ -175,6 +175,9 @@ const Analytics = () => {
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [drilldown, setDrilldown] = useState(null);
   const [forecast, setForecast] = useState(null);
+  // Sold cars, for the export picker only. Analytics itself reports the live fleet, so
+  // these are not in `data.vehicle_stats` and have to be asked for separately.
+  const [archivedVehicles, setArchivedVehicles] = useState([]);
   // The report is only mounted while an export is running. It is a second
   // rendering of everything on this page, charts included, and there is no reason to
   // pay for it on every visit for the sake of a button most sessions never press.
@@ -232,6 +235,29 @@ const Analytics = () => {
     apiFetch('/api/analytics/forecast')
       .then((res) => (res.ok ? res.json() : null))
       .then((payload) => { if (active && payload) setForecast(payload); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  // A vehicle with history is archived rather than deleted, and archived means retired
+  // from reporting — which is right for the page, but wrong for a report about the year
+  // a car was sold in. Fetched once and offered in the export dialog, opt-in. Silent on
+  // failure: the picker simply falls back to the live fleet.
+  useEffect(() => {
+    let active = true;
+    apiFetch('/api/vehicles?include_archived=true')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => {
+        if (!active || !Array.isArray(payload)) return;
+        setArchivedVehicles(
+          // Same fallback the analytics query applies: `name` is optional, and a
+          // vehicle only ever identified by make and model still needs a label.
+          payload.filter((v) => v.is_archived).map((v) => ({
+            id: v.id,
+            name: v.name || [v.make, v.model].filter(Boolean).join(' ') || 'Vehicle',
+          })),
+        );
+      })
       .catch(() => {});
     return () => { active = false; };
   }, []);
@@ -924,6 +950,7 @@ const Analytics = () => {
         onClose={() => setExportOpen(false)}
         onConfirm={handleExportConfirm}
         vehicles={(data.vehicle_stats || []).map((v) => ({ id: v.id, name: v.name }))}
+        archivedVehicles={archivedVehicles}
         availability={{
           categories: (data.expense_categories || []).length > 0,
           providers: (data.providers || []).length > 0,

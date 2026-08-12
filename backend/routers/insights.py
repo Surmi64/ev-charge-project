@@ -169,7 +169,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 COALESCE(SUM(ve.total_cost), 0) AS total_cost
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
+            WHERE v.user_id = %s{active_vehicles}
             GROUP BY v.id, v.starting_odometer_km
         ),
         distance_totals AS (
@@ -228,7 +228,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 ) AS distance_km
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
-            WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
+            WHERE v.user_id = %s{active_vehicles}
             GROUP BY v.id, v.starting_odometer_km
         )
         SELECT
@@ -637,10 +637,22 @@ def get_analytics_summary(
     # nothing, and answering with the whole fleet would be the opposite.
     selected_vehicles = list(vehicle_ids) if vehicle_ids is not None else None
 
-    # Archived vehicles are retired from reporting, so they drop out of every
-    # aggregate here as well as out of the per-vehicle breakdown below.
-    active_events = _active_events_predicate(db)
-    active_vehicles = _active_vehicle_clause(db)
+    # Archived vehicles are retired from reporting, so they drop out of every aggregate
+    # here as well as out of the per-vehicle breakdown below — but only when the caller
+    # asked for "the fleet" and left the membership to us. An explicit selection is
+    # already a filter, and a car sold mid-year is exactly what someone exports a report
+    # about, so naming it wins over the exclusion. Same rule the drilldown applies (see
+    # _fetch_trend_stats), reached the same way: by asking for that vehicle on purpose.
+    explicit_selection = selected_vehicles is not None
+    active_events = '' if explicit_selection else _active_events_predicate(db)
+    active_vehicles = '' if explicit_selection else _active_vehicle_clause(db)
+
+    # Which lets an archived vehicle reach the breakdown, so the row has to say so:
+    # without the flag a car sold in March is indistinguishable from one still on the
+    # road, and the reader would take its part-year spend for a full year's.
+    supports_archive = has_archive_support(db)
+    archived_select = 'v.is_archived' if supports_archive else 'FALSE'
+    archived_group = ', v.is_archived' if supports_archive else ''
 
     # Narrows the vehicles table itself, so the per-vehicle rows and every total
     # derived from them cover exactly the selection.
@@ -756,6 +768,7 @@ def get_analytics_summary(
             v.id,
             COALESCE(v.name, CONCAT(v.make, ' ', v.model)) AS name,
             v.fuel_type,
+            {archived_select} AS is_archived,
             COALESCE(event_stats.total_energy, 0) AS total_energy,
             COALESCE(event_stats.session_cost, 0) + COALESCE(event_stats.expense_cost, 0) AS total_cost,
             COALESCE(event_stats.session_cost, 0) AS session_cost,
@@ -769,7 +782,7 @@ def get_analytics_summary(
         LEFT JOIN event_stats ON event_stats.vehicle_id = v.id
         LEFT JOIN odometer_stats ON odometer_stats.vehicle_id = v.id
         WHERE v.user_id = %s{active_vehicles}{vehicle_scope}
-        GROUP BY v.id, v.name, v.make, v.model, v.fuel_type, event_stats.total_energy, event_stats.session_cost, event_stats.expense_cost, odometer_stats.distance_km
+        GROUP BY v.id, v.name, v.make, v.model, v.fuel_type{archived_group}, event_stats.total_energy, event_stats.session_cost, event_stats.expense_cost, odometer_stats.distance_km
         ORDER BY total_cost DESC, name ASC;
         """,
         event_params + join_params + scope_params + scope_params,
@@ -778,7 +791,7 @@ def get_analytics_summary(
     trend_bucket = _trend_bucket_for_range(normalized_range)
     trend = _fetch_trend_stats(
         cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
-        vehicle_ids=selected_vehicles,
+        vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
     )
 
     cur.execute(
@@ -846,6 +859,7 @@ def get_analytics_summary(
             'expense_cost': _float(row.get('expense_cost')),
             'distance_km': _float(row.get('distance_km')),
             'cost_per_100km': float(row['cost_per_100km']) if row.get('cost_per_100km') is not None else None,
+            'is_archived': bool(row.get('is_archived')),
         }
         for row in vehicle_stats
     ]
