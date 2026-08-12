@@ -203,8 +203,67 @@ def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depen
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def count_vehicle_history(cur, db, vehicle_id: int, user_id: str) -> dict:
+    """How many records would go with this vehicle, per table.
+
+    Both a precondition for archiving and the figure the purge confirmation shows:
+    a delete that cannot be undone should say what it is about to take.
+    """
+    vehicle_column = get_vehicle_column(db)
+    cur.execute(
+        f'SELECT COUNT(*) AS count FROM charging_sessions WHERE {vehicle_column} = %s AND user_id = %s;',
+        (vehicle_id, user_id),
+    )
+    sessions = cur.fetchone()['count']
+    cur.execute('SELECT COUNT(*) AS count FROM expenses WHERE vehicle_id = %s AND user_id = %s;', (vehicle_id, user_id))
+    expenses = cur.fetchone()['count']
+
+    reminders = 0
+    if table_exists(db, 'recurring_expense_reminders'):
+        cur.execute(
+            'SELECT COUNT(*) AS count FROM recurring_expense_reminders WHERE vehicle_id = %s AND user_id = %s;',
+            (vehicle_id, user_id),
+        )
+        reminders = cur.fetchone()['count']
+
+    return {'sessions': sessions, 'expenses': expenses, 'reminders': reminders}
+
+
+@router.get('/vehicles/{vehicle_id}/history-count')
+def get_vehicle_history_count(vehicle_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+    """What a permanent delete of this vehicle would destroy.
+
+    A read, so it is deliberately not gated on write access -- a lapsed account may
+    still look at what it owns. The confirmation dialog calls this before offering the
+    purge, because "delete 2 years of fuel-ups" and "delete an empty car" are the same
+    button otherwise.
+    """
+    cur = db.cursor()
+    cur.execute('SELECT id FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail='Vehicle not found or unauthorized')
+    try:
+        return count_vehicle_history(cur, db, vehicle_id, user_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.delete('/vehicles/{vehicle_id}')
-def delete_vehicle(vehicle_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def delete_vehicle(
+    vehicle_id: int,
+    purge: bool = Query(False),
+    user_id: str = Depends(get_current_user_id),
+    _subscription=Depends(require_write_access),
+    db=Depends(get_tenant_db),
+):
+    """Delete a vehicle, archiving it instead if it still carries history.
+
+    `purge=true` is the second step: it deletes the history too, and is accepted only
+    for a vehicle that is already archived. Archiving first is what makes this hard to
+    do by accident -- there is no single click anywhere that destroys a car's records.
+    """
     cur = db.cursor()
     select_fields = 'id, is_default, is_archived' if has_archive_support(db) else 'id, is_default'
     cur.execute(f'SELECT {select_fields} FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
@@ -212,12 +271,34 @@ def delete_vehicle(vehicle_id: int, user_id: str = Depends(get_current_user_id),
     if not existing_vehicle:
         raise HTTPException(status_code=404, detail='Vehicle not found or unauthorized')
 
+    if purge and has_archive_support(db) and not existing_vehicle.get('is_archived'):
+        raise HTTPException(status_code=409, detail='Archive the vehicle before deleting it permanently')
+
     try:
         vehicle_column = get_vehicle_column(db)
-        cur.execute(f'SELECT COUNT(*) AS count FROM charging_sessions WHERE {vehicle_column} = %s AND user_id = %s;', (vehicle_id, user_id))
-        session_count = cur.fetchone()['count']
-        cur.execute('SELECT COUNT(*) AS count FROM expenses WHERE vehicle_id = %s AND user_id = %s;', (vehicle_id, user_id))
-        expense_count = cur.fetchone()['count']
+        counts = count_vehicle_history(cur, db, vehicle_id, user_id)
+        session_count = counts['sessions']
+        expense_count = counts['expenses']
+
+        if purge:
+            # Every dependent row is removed by hand rather than left to the foreign
+            # keys. Only charging_sessions cascades; expenses, vehicle_events and the
+            # reminders are ON DELETE SET NULL, so dropping the vehicle alone would
+            # leave its spending in the account's totals with nothing to attribute it
+            # to -- the opposite of what deleting a car is for.
+            if table_exists(db, 'vehicle_events'):
+                cur.execute('DELETE FROM vehicle_events WHERE vehicle_id = %s AND user_id = %s;', (vehicle_id, user_id))
+            if table_exists(db, 'recurring_expense_reminders'):
+                cur.execute(
+                    'DELETE FROM recurring_expense_reminders WHERE vehicle_id = %s AND user_id = %s;',
+                    (vehicle_id, user_id),
+                )
+            cur.execute(f'DELETE FROM charging_sessions WHERE {vehicle_column} = %s AND user_id = %s;', (vehicle_id, user_id))
+            cur.execute('DELETE FROM expenses WHERE vehicle_id = %s AND user_id = %s;', (vehicle_id, user_id))
+            cur.execute('DELETE FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
+            ensure_active_default_vehicle(cur, db, user_id)
+            db.commit()
+            return {'message': 'Vehicle and its history deleted', 'purged': True, 'deleted': counts}
 
         if has_archive_support(db) and (session_count or expense_count):
             cur.execute(

@@ -103,6 +103,9 @@ const Vehicles = () => {
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [submitSubmitting, setSubmitSubmitting] = useState(false);
   const [pendingDeleteVehicle, setPendingDeleteVehicle] = useState(null);
+  // What a permanent delete would take with it. Null until the count arrives, which is
+  // also what keeps the button from being offered before the user can see the cost.
+  const [pendingDeleteCounts, setPendingDeleteCounts] = useState(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [busyVehicleId, setBusyVehicleId] = useState(null);
   const [formData, setFormData] = useState({
@@ -132,6 +135,21 @@ const Vehicles = () => {
   const activeVehicles = vehicles.filter((vehicle) => !vehicle.is_archived);
   const archivedVehicles = vehicles.filter((vehicle) => vehicle.is_archived);
   const visibleVehicles = showArchived ? vehicles : activeVehicles;
+
+  // Deleting an archived vehicle is the permanent one; deleting an active vehicle only
+  // archives it if it has history. Two very different buttons behind one icon, so the
+  // dialog reads off which case it is in.
+  const purgingArchived = Boolean(pendingDeleteVehicle?.is_archived);
+  const deletionSummary = pendingDeleteCounts
+    ? [
+      [pendingDeleteCounts.sessions, 'charging or fuel record'],
+      [pendingDeleteCounts.expenses, 'cost entry'],
+      [pendingDeleteCounts.reminders, 'recurring reminder'],
+    ]
+      .filter(([count]) => count > 0)
+      .map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`)
+      .join(', ')
+    : '';
 
   if (showSkeleton) return <TableSectionSkeleton rows={4} />;
   if (loading) return null;
@@ -217,6 +235,17 @@ const Vehicles = () => {
     }
 
     setPendingDeleteVehicle(vehicle);
+    setPendingDeleteCounts(null);
+    // Deleting an archived vehicle takes its history with it and cannot be undone, so
+    // the dialog says how much history that is before the button is offered. Only for
+    // archived ones: an active vehicle is archived rather than deleted, which is
+    // reversible and needs no warning.
+    if (vehicle.is_archived) {
+      apiFetch(`/api/vehicles/${vehicle.id}/history-count`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((counts) => { if (counts) setPendingDeleteCounts(counts); })
+        .catch(() => {});
+    }
   };
 
   const handleDeleteDialogClose = () => {
@@ -225,6 +254,7 @@ const Vehicles = () => {
     }
 
     setPendingDeleteVehicle(null);
+    setPendingDeleteCounts(null);
   };
 
   const handleDelete = async () => {
@@ -235,7 +265,10 @@ const Vehicles = () => {
     try {
       setDeleteSubmitting(true);
       setBusyVehicleId(pendingDeleteVehicle.id);
-      const response = await apiFetch(`/api/vehicles/${pendingDeleteVehicle.id}`, {
+      // An archived vehicle is already past the reversible step, so this one deletes
+      // the history too. The server refuses the flag for anything not archived.
+      const purge = Boolean(pendingDeleteVehicle.is_archived);
+      const response = await apiFetch(`/api/vehicles/${pendingDeleteVehicle.id}${purge ? '?purge=true' : ''}`, {
         method: 'DELETE',
               });
       if (!response.ok) {
@@ -245,6 +278,7 @@ const Vehicles = () => {
       const result = await response.json().catch(() => ({}));
       toast.success(result.archived ? 'Vehicle archived' : 'Vehicle deleted');
       setPendingDeleteVehicle(null);
+      setPendingDeleteCounts(null);
       fetchVehicles();
     } catch (error) {
       toast.error(error.message || 'Failed to delete vehicle');
@@ -377,13 +411,14 @@ const Vehicles = () => {
                         </IconButton>
                       </span>
                     </Tooltip>
-                    {!v.is_archived ? (
-                      <Tooltip title="Delete vehicle">
-                        <span>
-                          <IconButton onClick={() => handleDeleteRequest(v)} size="small" color="error" disabled={busyVehicleId === v.id}><DeleteIcon /></IconButton>
-                        </span>
-                      </Tooltip>
-                    ) : null}
+                    {/* Offered on archived rows too, where it is the permanent one:
+                        archiving is the reversible step, and a car kept only so its
+                        history survives still has to be removable eventually. */}
+                    <Tooltip title={v.is_archived ? 'Delete permanently' : 'Delete vehicle'}>
+                      <span>
+                        <IconButton onClick={() => handleDeleteRequest(v)} size="small" color="error" disabled={busyVehicleId === v.id}><DeleteIcon /></IconButton>
+                      </span>
+                    </Tooltip>
                   </TableCell>
                 </TableRow>
               ))}
@@ -552,21 +587,33 @@ const Vehicles = () => {
       </Dialog>
 
       <Dialog open={!!pendingDeleteVehicle} onClose={handleDeleteDialogClose} fullWidth maxWidth="xs">
-        <DialogTitle>Delete Vehicle</DialogTitle>
+        <DialogTitle>{purgingArchived ? 'Delete Permanently' : 'Delete Vehicle'}</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">
-            Delete this vehicle? If it already has linked history, Mileage will archive it instead so those records stay intact.
+            {purgingArchived
+              ? 'This vehicle is archived. Deleting it now also deletes its history, and removes that spending from your totals. It cannot be undone.'
+              : 'Delete this vehicle? If it already has linked history, Mileage will archive it instead so those records stay intact.'}
           </Typography>
           {pendingDeleteVehicle ? (
             <Typography sx={{ mt: 1.5, fontWeight: 700 }}>
               {pendingDeleteVehicle.name || `${pendingDeleteVehicle.make} ${pendingDeleteVehicle.model}`}
             </Typography>
           ) : null}
+          {/* Counted server-side rather than guessed: the button stays out of reach
+              until the user can see what pressing it costs. */}
+          {purgingArchived ? (
+            <Typography variant="body2" color="error" sx={{ mt: 0.5 }}>
+              {pendingDeleteCounts
+                ? (deletionSummary ? `Also deletes ${deletionSummary}.` : 'No records attached — only the vehicle itself.')
+                : 'Counting its records…'}
+            </Typography>
+          ) : null}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleDeleteDialogClose} disabled={deleteSubmitting}>Cancel</Button>
-          <Button onClick={handleDelete} color="error" variant="contained" disabled={deleteSubmitting}>
-            {deleteSubmitting ? 'Deleting...' : 'Delete'}
+          <Button onClick={handleDelete} color="error" variant="contained"
+            disabled={deleteSubmitting || (purgingArchived && !pendingDeleteCounts)}>
+            {deleteSubmitting ? 'Deleting...' : (purgingArchived ? 'Delete everything' : 'Delete')}
           </Button>
         </DialogActions>
       </Dialog>
