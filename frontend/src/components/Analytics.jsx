@@ -54,6 +54,7 @@ import {
   buildTickLabel,
   buildTooltipLabel,
   buildTrendRows,
+  describeStretch,
   rankByMetric,
 } from '../utils/analyticsFormat';
 import AnalyticsReport from './AnalyticsReport';
@@ -456,6 +457,7 @@ const Analytics = () => {
   const categories = data.expense_categories || [];
   const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
   const providers = data.providers || [];
+  const stretches = data.longest_stretches || [];
   // One colour per provider, assigned from the record-count order and reused by both
   // charts — the same name must not change colour between them, or the pair reads as
   // two unrelated pictures instead of two views of one.
@@ -743,6 +745,47 @@ const Analytics = () => {
             )}
           </Card>
 
+          {/* How far a vehicle goes on one charge or tank, as it was actually driven. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Longest stretches</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Most distance between two charges or fill-ups. A refill you did not log makes the
+              stretch around it look longer than it was.
+            </Typography>
+            {stretches.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                Needs two refills in a row with an odometer reading. Add one to your sessions and it fills in.
+              </Typography>
+            ) : (
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' }, gap: 2 }}>
+                {stretches.map((stretch, index) => {
+                  const text = describeStretch(stretch, fmt);
+                  return (
+                    <Box key={`${stretch.vehicle_id}-${stretch.ended_at}`}
+                      sx={{ borderLeft: `3px solid ${index === 0 ? theme.palette.primary.main : theme.palette.divider}`, pl: 1.5 }}>
+                      <Typography variant="caption" color="text.secondary">#{index + 1}</Typography>
+                      <Typography variant="h6" component="div" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {km(stretch.distance_km)}
+                      </Typography>
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, mb: 0.25 }}>
+                        <Typography variant="body2" fontWeight={700} noWrap>{stretch.vehicle_name}</Typography>
+                        <Chip size="small" variant="outlined" label={stretch.fuel_type} />
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {text.dates}{text.duration ? ` · ${text.duration}` : ''}
+                      </Typography>
+                      {text.refill ? (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                          then {text.refill}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+          </Card>
+
           {/* Full detail, replacing two bar charts and three leaderboards. */}
           <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
             <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>All figures</Typography>
@@ -954,6 +997,7 @@ const Analytics = () => {
         availability={{
           categories: (data.expense_categories || []).length > 0,
           providers: (data.providers || []).length > 0,
+          stretches: (data.longest_stretches || []).length > 0,
           drilldown: Boolean(drilldown),
         }}
         projectionAvailable={projectionOn}

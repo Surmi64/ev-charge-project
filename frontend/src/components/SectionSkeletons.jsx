@@ -154,6 +154,23 @@ export function AnalyticsSkeleton() {
         </Stack>
       </Card>
 
+      {/* Longest stretches: three tiles. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Skeleton variant="text" width={170} height={30} />
+        <Skeleton variant="text" width="65%" height={20} sx={{ mb: 2 }} />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' }, gap: 2 }}>
+          {[0, 1, 2].map((tile) => (
+            <Box key={tile}>
+              <Skeleton variant="text" width={24} height={18} />
+              <Skeleton variant="text" width={90} height={32} />
+              <Skeleton variant="text" width={130} height={24} />
+              <Skeleton variant="text" width="80%" height={18} />
+              <Skeleton variant="text" width="50%" height={18} />
+            </Box>
+          ))}
+        </Box>
+      </Card>
+
       {/* All figures table. */}
       <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
         <Skeleton variant="text" width={140} height={30} />

@@ -607,6 +607,102 @@ def _fetch_trend_stats(
     return [_serialize_trend_row(row) for row in cur.fetchall()]
 
 
+def _fetch_longest_stretches(
+    cur,
+    user_id: str,
+    db=None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    vehicle_ids: list[int] | None = None,
+    exclude_archived: bool = True,
+    limit: int = 3,
+) -> list[dict]:
+    """The longest distances driven between two consecutive refills of one vehicle.
+
+    A refill is any charging or fueling record, so a hybrid's stretch ends at whichever
+    came first. A stretch belongs to the range its closing refill falls in; the opening
+    one may lie before the range, the same reasoning as the trend's odometer deltas.
+    Records without an odometer reading are skipped rather than breaking the chain,
+    and a reading lower than the previous one (a typo, a replaced cluster) is dropped.
+    """
+    filters = [
+        'user_id = %s',
+        "event_type IN ('charging', 'fueling')",
+        'odometer_km IS NOT NULL',
+        'vehicle_id IS NOT NULL',
+    ]
+    params: list[object] = [user_id]
+
+    if end_date is not None:
+        filters.append('occurred_at < %s')
+        params.append(end_date.isoformat())
+
+    if vehicle_ids is not None:
+        filters.append('vehicle_id = ANY(%s)')
+        params.append(list(vehicle_ids))
+
+    archived_clause = _active_events_clause(db) if (exclude_archived and db is not None) else ''
+
+    # The outer query's own parameters: the vehicles join, the range start, the limit.
+    outer_params: list[object] = [user_id]
+    range_clause = ''
+    if start_date is not None:
+        range_clause = ' AND r.occurred_at >= %s'
+        outer_params.append(start_date.isoformat())
+    outer_params.append(limit)
+
+    cur.execute(
+        f"""
+        WITH refills AS (
+            SELECT
+                id,
+                vehicle_id,
+                occurred_at,
+                odometer_km,
+                event_type,
+                energy_kwh,
+                fuel_liters,
+                LAG(odometer_km) OVER w AS prev_odometer_km,
+                LAG(occurred_at) OVER w AS prev_occurred_at
+            FROM vehicle_events
+            WHERE {' AND '.join(filters)}{archived_clause}
+            WINDOW w AS (PARTITION BY vehicle_id ORDER BY occurred_at, id)
+        )
+        SELECT
+            r.vehicle_id,
+            COALESCE(v.name, CONCAT(v.make, ' ', v.model)) AS vehicle_name,
+            v.fuel_type,
+            r.prev_occurred_at AS started_at,
+            r.occurred_at AS ended_at,
+            r.odometer_km - r.prev_odometer_km AS distance_km,
+            r.event_type AS end_event_type,
+            r.energy_kwh AS end_energy_kwh,
+            r.fuel_liters AS end_fuel_liters
+        FROM refills r
+        JOIN vehicles v ON v.id = r.vehicle_id AND v.user_id = %s
+        WHERE r.prev_odometer_km IS NOT NULL
+          AND r.odometer_km > r.prev_odometer_km{range_clause}
+        ORDER BY distance_km DESC, r.occurred_at DESC
+        LIMIT %s;
+        """,
+        params + outer_params,
+    )
+    return [
+        {
+            'vehicle_id': row['vehicle_id'],
+            'vehicle_name': row['vehicle_name'],
+            'fuel_type': row['fuel_type'],
+            'started_at': row['started_at'].isoformat() if row.get('started_at') else None,
+            'ended_at': row['ended_at'].isoformat() if row.get('ended_at') else None,
+            'distance_km': _float(row.get('distance_km')),
+            'end_event_type': row['end_event_type'],
+            'end_energy_kwh': float(row['end_energy_kwh']) if row.get('end_energy_kwh') is not None else None,
+            'end_fuel_liters': float(row['end_fuel_liters']) if row.get('end_fuel_liters') is not None else None,
+        }
+        for row in cur.fetchall()
+    ]
+
+
 def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
     """Month buckets keyed 'YYYY-MM', which is what the dashboard looks up by."""
     rows = _fetch_trend_stats(cur, user_id, bucket='month', **kwargs)
@@ -876,6 +972,11 @@ def get_analytics_summary(
     comparison = resolve_basis(cur, user_id, _reference_figures(db, cur, user_id), start_date, end_date)
     annotate_trend(trend, comparison)
 
+    longest_stretches = _fetch_longest_stretches(
+        cur, user_id, db=db, start_date=start_date, end_date=end_date,
+        vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
+    )
+
     return {
         'range': normalized_range,
         'weekly_trend': [{'week': row['week'], 'energy': float(row['energy'] or 0)} for row in weekly_trend],
@@ -884,6 +985,7 @@ def get_analytics_summary(
         'fuel_comparison': comparison,
         'vehicle_stats': serialized_vehicle_stats,
         'providers': providers,
+        'longest_stretches': longest_stretches,
         'expense_categories': [
             {
                 'category': row['category'],

@@ -48,6 +48,7 @@ import {
   buildProviderSlices,
   buildTickLabel,
   buildTooltipLabel,
+  describeStretch,
 } from '../utils/analyticsFormat';
 
 // A4 portrait less the 10 mm side margins the exporter uses, at 96 dpi. Charts are
@@ -210,6 +211,7 @@ const AnalyticsReport = ({
   const categories = data.expense_categories || [];
   const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
   const providers = data.providers || [];
+  const stretches = data.longest_stretches || [];
   const columns = buildColumns(fmt);
 
   const tickLabel = buildTickLabel(trendBucket);
@@ -514,6 +516,37 @@ const AnalyticsReport = ({
           <ProviderBlock slices={energySlices} valueHeader="Energy"
             formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
             empty="No charging with a recorded kWh figure in this range." theme={theme} />
+        </Section>
+      ) : null}
+
+      {stretches.length && shows('stretches') ? (
+        <Section title="Longest stretches"
+          note="Most distance between two charges or fill-ups. A refill that was not logged makes the stretch around it look longer than it was.">
+          <table className="pr-table pr-table-full">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Vehicle</th>
+                <th>Between</th>
+                <th>Refill after</th>
+                <th className="pr-num">Distance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stretches.map((stretch, index) => {
+                const text = describeStretch(stretch, fmt);
+                return (
+                  <tr key={`${stretch.vehicle_id}-${stretch.ended_at}`}>
+                    <td>{index + 1}</td>
+                    <td>{`${stretch.vehicle_name} (${stretch.fuel_type})`}</td>
+                    <td>{text.dates}{text.duration ? ` · ${text.duration}` : ''}</td>
+                    <td>{text.refill || '—'}</td>
+                    <td className="pr-num"><strong>{fmt.distance(stretch.distance_km)}</strong></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </Section>
       ) : null}
 

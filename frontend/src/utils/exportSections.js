@@ -21,6 +21,7 @@ export const EXPORT_SECTIONS = [
   { id: 'categories', label: 'Cost categories', hint: 'Insurance, tax, maintenance…', needs: 'categories' },
   { id: 'providerStops', label: 'Providers — stops', hint: 'How often you stop where.', needs: 'providers' },
   { id: 'providerEnergy', label: 'Providers — energy', hint: 'And how much energy you take there.', needs: 'providers' },
+  { id: 'stretches', label: 'Longest stretches', hint: 'Most distance between two refills.', needs: 'stretches' },
   { id: 'vehicleTable', label: 'All figures', hint: 'One row per vehicle.' },
   { id: 'drilldown', label: 'Single vehicle', hint: 'The vehicle selected on the page.', needs: 'drilldown' },
 ];

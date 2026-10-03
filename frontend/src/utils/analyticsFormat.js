@@ -174,3 +174,35 @@ export const buildProviderSlices = (rows, key, colors, { tailColor, unnamedColor
   }
   return slices;
 };
+
+/**
+ * The words around one of the longest stretches between refills.
+ *
+ * The span is written as dates rather than a duration alone: "4 days" says nothing
+ * about which trip it was, and the reader needs to find it in Records. The refill that
+ * closed the stretch rides along because it is the sanity check — 3000 km followed by
+ * a 6 kWh top-up is a missed record, not a road trip.
+ */
+export const describeStretch = (stretch, fmt) => {
+  const start = stretch.started_at ? new Date(stretch.started_at) : null;
+  const end = stretch.ended_at ? new Date(stretch.ended_at) : null;
+  const sameYear = start && end && start.getFullYear() === end.getFullYear();
+  const startLabel = start
+    ? start.toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { dateStyle: 'medium' })
+    : '?';
+  const endLabel = end ? end.toLocaleDateString(undefined, { dateStyle: 'medium' }) : '?';
+  const days = start && end ? Math.round((end - start) / 86400000) : null;
+
+  let refill = null;
+  if (stretch.end_event_type === 'charging' && stretch.end_energy_kwh != null) {
+    refill = `charged ${fmt.energy(stretch.end_energy_kwh)}`;
+  } else if (stretch.end_event_type === 'fueling' && stretch.end_fuel_liters != null) {
+    refill = `fuelled ${fmt.volume(stretch.end_fuel_liters)}`;
+  }
+
+  return {
+    dates: `${startLabel} → ${endLabel}`,
+    duration: days == null ? null : days < 1 ? 'same day' : `${days} day${days === 1 ? '' : 's'}`,
+    refill,
+  };
+};
