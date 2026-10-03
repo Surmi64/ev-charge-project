@@ -80,7 +80,14 @@ def get_activity_feed(
                 ve.vehicle_id::bigint AS vehicle_id,
                 COALESCE(v.name, CONCAT(v.make, ' ', v.model), 'All vehicles')::text AS vehicle_name,
                 COALESCE(ve.title, INITCAP(REPLACE(COALESCE(ve.expense_category, ve.event_type), '_', ' ')))::text AS title,
-                ve.notes::text AS description
+                ve.notes::text AS description,
+                -- What Records' table view shows beside the cost. All nullable: a cost
+                -- has none of them, and a session only what was entered.
+                ve.odometer_km,
+                ve.energy_kwh,
+                ve.fuel_liters,
+                ve.battery_level_start,
+                ve.battery_level_end
                 {location_select}
             FROM vehicle_events ve
             LEFT JOIN vehicles v ON v.id = ve.vehicle_id AND v.user_id = ve.user_id
@@ -116,6 +123,12 @@ def get_activity_feed(
             'place_name': row.get('place_name'),
             'latitude': float(row['latitude']) if row.get('latitude') is not None else None,
             'longitude': float(row['longitude']) if row.get('longitude') is not None else None,
+            # Stored in km and litres like everywhere else; the client converts.
+            'odometer_km': float(row['odometer_km']) if row.get('odometer_km') is not None else None,
+            'energy_kwh': float(row['energy_kwh']) if row.get('energy_kwh') is not None else None,
+            'fuel_liters': float(row['fuel_liters']) if row.get('fuel_liters') is not None else None,
+            'battery_level_start': row.get('battery_level_start'),
+            'battery_level_end': row.get('battery_level_end'),
         }
         for row in cur.fetchall()
     ]

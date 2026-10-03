@@ -253,6 +253,25 @@ export function TimelineSectionSkeleton() {
   );
 }
 
+/** Records in table view: the header row, then one line per record. */
+export function RecordsTableSkeleton() {
+  return (
+    <Paper sx={{ borderRadius: 4, overflow: 'hidden' }}>
+      <Box sx={{ px: 2, py: 1 }}>
+        <Skeleton variant="text" height={24} />
+      </Box>
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
+        <Box key={row}>
+          <Divider />
+          <Box sx={{ px: 2, py: 0.75 }}>
+            <Skeleton variant="text" height={34} />
+          </Box>
+        </Box>
+      ))}
+    </Paper>
+  );
+}
+
 /** Vehicles and User management: a full page swap ending in a table. */
 export function TableSectionSkeleton({ rows = 5 }) {
   return (

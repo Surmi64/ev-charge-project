@@ -18,6 +18,8 @@ import {
   Tab,
   Tabs,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
   useMediaQuery,
@@ -31,6 +33,8 @@ import {
   Edit as EditIcon,
   Place as PlaceIcon,
   Search as SearchIcon,
+  TableRows as TableRowsIcon,
+  ViewAgenda as ViewAgendaIcon,
   UploadFile as UploadFileIcon,
 } from '@mui/icons-material';
 import { useSearchParams } from 'react-router-dom';
@@ -40,8 +44,9 @@ import { useDelayedLoading } from '../utils/useDelayedLoading';
 import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
-import { TimelineSectionSkeleton } from './SectionSkeletons';
+import { RecordsTableSkeleton, TimelineSectionSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
+import RecordsTable from './RecordsTable';
 import RecurringExpenses from './RecurringExpenses';
 
 // One request per screenful. The API caps a page at 200; 100 keeps the payload small
@@ -89,6 +94,15 @@ function Activity() {
     const params = new URLSearchParams(searchParams);
     if (next === 'ledger') params.delete('tab');
     else params.set('tab', next);
+    setSearchParams(params, { replace: true });
+  };
+  // List or table, kept in the URL beside the tab for the same reasons. The list is
+  // the default because it is the one that fits a phone.
+  const view = searchParams.get('view') === 'table' ? 'table' : 'list';
+  const setView = (next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'list') params.delete('view');
+    else params.set('view', next);
     setSearchParams(params, { replace: true });
   };
   const [activity, setActivity] = useState([]);
@@ -292,6 +306,40 @@ function Activity() {
 
   const hasFilters = activityType !== 'all' || vehicleId !== 'all' || search.trim() !== '';
 
+  // Shared by the list and the table, so both views edit and delete the same way.
+  // A tooltip is not an accessible name — a screen reader reads these as "button".
+  // Every row has the same two, so the label has to say which record it acts on.
+  const renderActions = (item) => {
+    const busy = busyId === item.id;
+    const when = new Date(item.occurred_at).toLocaleDateString();
+    return (
+      <>
+        <Tooltip title="Edit record">
+          <span>
+            <IconButton
+              size="small" color="primary" disabled={busy}
+              aria-label={`Edit the ${item.title} record from ${when}`}
+              onClick={() => handleEdit(item)}
+            >
+              <EditIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Delete record">
+          <span>
+            <IconButton
+              size="small" color="error" disabled={busy}
+              aria-label={`Delete the ${item.title} record from ${when}`}
+              onClick={() => setPendingDelete(item)}
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </>
+    );
+  };
+
   return (
     <Box className="section-shell stagger">
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
@@ -344,7 +392,16 @@ function Activity() {
                   <MenuItem key={v.id} value={String(v.id)}>{v.name || `${v.make} ${v.model}`}</MenuItem>
                 ))}
               </TextField>
-              <Stack direction="row" spacing={1} sx={{ pt: { md: 1 } }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ pt: { md: 1 } }}>
+                <ToggleButtonGroup exclusive size="small" value={view} aria-label="Records view"
+                  onChange={(_, next) => next && setView(next)}>
+                  <ToggleButton value="list" aria-label="List view">
+                    <Tooltip title="List"><ViewAgendaIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                  <ToggleButton value="table" aria-label="Table view">
+                    <Tooltip title="Table with odometer, energy and location"><TableRowsIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                </ToggleButtonGroup>
                 <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleCsvFilePicked} />
                 <Tooltip title="Import a CSV exported from Mileage">
                   <span>
@@ -361,7 +418,7 @@ function Activity() {
           </Paper>
 
           {showSkeleton ? (
-            <TimelineSectionSkeleton />
+            view === 'table' ? <RecordsTableSkeleton /> : <TimelineSectionSkeleton />
           ) : loading ? null : activity.length === 0 ? (
             <Card sx={{ p: 4, borderRadius: 4, textAlign: 'center' }}>
               <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>
@@ -382,11 +439,12 @@ function Activity() {
                 </Button>
               )}
             </Card>
+          ) : view === 'table' ? (
+            <RecordsTable items={activity} fmt={fmt} renderActions={renderActions}
+              showVehicle={vehicleId === 'all'} />
           ) : (
             <Paper sx={{ borderRadius: 4, px: 2 }}>
-              {activity.map((item, index) => {
-                const busy = busyId === item.id;
-                return (
+              {activity.map((item, index) => (
                   <Box key={`${item.activity_type}-${item.id}`}>
                     {index > 0 ? <Divider /> : null}
                     <Stack
@@ -423,36 +481,11 @@ function Activity() {
                         <Typography variant="subtitle1" fontWeight={700} sx={{ whiteSpace: 'nowrap' }}>
                           {fmt.money(item.amount)}
                         </Typography>
-                        {/* A tooltip is not an accessible name — a screen reader reads
-                            these as "button". Every row has the same two, so the label
-                            has to say which record it acts on. */}
-                        <Tooltip title="Edit record">
-                          <span>
-                            <IconButton
-                              size="small" color="primary" disabled={busy}
-                              aria-label={`Edit the ${item.title} record from ${new Date(item.occurred_at).toLocaleDateString()}`}
-                              onClick={() => handleEdit(item)}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title="Delete record">
-                          <span>
-                            <IconButton
-                              size="small" color="error" disabled={busy}
-                              aria-label={`Delete the ${item.title} record from ${new Date(item.occurred_at).toLocaleDateString()}`}
-                              onClick={() => setPendingDelete(item)}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                        {renderActions(item)}
                       </Stack>
                     </Stack>
                   </Box>
-                );
-              })}
+              ))}
             </Paper>
           )}
 
