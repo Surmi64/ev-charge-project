@@ -48,8 +48,10 @@ import { StackTopBar } from '../utils/chartShapes';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import {
   BUCKET_NOUN,
+  annualDistanceYears,
   buildColumns,
   buildMetrics,
+  buildMonthlyDistance,
   buildProviderSlices,
   buildTickLabel,
   buildTooltipLabel,
@@ -200,6 +202,10 @@ const Analytics = () => {
   const comparison = data?.fuel_comparison || null;
   const trendTick = useMemo(() => buildTickLabel(trendBucket), [trendBucket]);
   const trendTooltipLabel = useMemo(() => buildTooltipLabel(trendBucket), [trendBucket]);
+  // The distance chart is monthly whatever the range: odometer readings are too sparse
+  // for daily or weekly buckets to be anything but noise.
+  const monthTick = useMemo(() => buildTickLabel('month'), []);
+  const monthTooltipLabel = useMemo(() => buildTooltipLabel('month'), []);
   const trendNoun = BUCKET_NOUN[trendBucket] || 'month';
 
   const drilldownBucket = drilldown?.trend_bucket || trendBucket;
@@ -472,6 +478,11 @@ const Analytics = () => {
   };
   const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, sliceGreys);
   const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, sliceGreys);
+  const distance = buildMonthlyDistance(
+    data.monthly_distance, data.vehicle_stats, fmt, COLORS, sliceGreys.tailColor,
+  );
+  const annual = data.annual_distance || [];
+  const annualYears = annualDistanceYears(annual);
   const hasData = (data.vehicle_stats || []).length > 0;
   const rangeLabel = RANGES.find((r) => r.value === range)?.label.toLowerCase();
 
@@ -745,6 +756,103 @@ const Analytics = () => {
             )}
           </Card>
 
+          {/* Distance by month, and by year once a vehicle has the history for it. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Distance driven</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Per month, from your odometer readings. A month counts the distance up to its
+              last reading, so a gap between readings lands in the month that closes it.
+            </Typography>
+            {distance.months.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                Needs two odometer readings on the same vehicle. Add one to your records and it fills in.
+              </Typography>
+            ) : (
+              <Box sx={{ width: '100%', height: isMobile ? 220 : 280 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={distance.months} margin={{ left: 4, right: 4 }}>
+                    <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
+                    <XAxis dataKey="period" tickFormatter={monthTick} axisLine={false} tickLine={false}
+                      interval="preserveStartEnd" minTickGap={16}
+                      tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                    <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
+                      tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                    {/* The values are already in the account's unit, so they are
+                        rounded and labelled here rather than sent back through
+                        fmt.distance, which would convert them a second time. */}
+                    <Tooltip contentStyle={tooltipStyle} labelFormatter={monthTooltipLabel}
+                      formatter={(value, name) => [`${Math.round(value).toLocaleString()} ${fmt.distanceShort}`, name]} />
+                    {distance.series.length > 1 ? (
+                      <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
+                    ) : null}
+                    {distance.series.map((entry, index) => (
+                      <Bar key={entry.key} dataKey={entry.key} name={entry.name} stackId="distance"
+                        fill={entry.color} isAnimationActive={chartAnimation}
+                        shape={<StackTopBar above={distance.series.slice(index + 1).map((e) => e.key)} />} />
+                    ))}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </Box>
+            )}
+
+            {/* Only once a vehicle has two years of readings: with less, a yearly figure
+                is one partial year scaled up, which the chart above shows more honestly. */}
+            {annual.length > 0 ? (
+              <>
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle2" fontWeight={700}>Per year</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                  Whole history, whatever the range above. Vehicles with readings in at least
+                  two calendar years. Italic years are only partly covered; the average uses the
+                  time actually covered, so they do not drag it down, and appears once a full
+                  year is on record.
+                </Typography>
+                <TableContainer sx={{ overflowX: 'auto' }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Vehicle</TableCell>
+                        {annualYears.map((year) => <TableCell key={year} align="right">{year}</TableCell>)}
+                        <TableCell align="right">Per year</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {annual.map((vehicle) => {
+                        const byYear = new Map(vehicle.years.map((y) => [y.year, y]));
+                        return (
+                          <TableRow key={vehicle.vehicle_id} hover>
+                            <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <Typography variant="body2" fontWeight={700}>{vehicle.vehicle_name}</Typography>
+                                <Chip size="small" variant="outlined" label={vehicle.fuel_type} />
+                              </Stack>
+                            </TableCell>
+                            {annualYears.map((year) => {
+                              const entry = byYear.get(year);
+                              return (
+                                <TableCell key={year} align="right"
+                                  sx={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+                                    ...(entry?.partial ? { fontStyle: 'italic', color: 'text.secondary' } : {}) }}
+                                  title={entry?.partial ? 'Partly covered year' : undefined}>
+                                  {entry ? km(entry.distance_km) : '—'}
+                                </TableCell>
+                              );
+                            })}
+                            <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                              <Typography variant="body2" fontWeight={700}>
+                                {vehicle.avg_per_year_km != null ? `≈ ${km(vehicle.avg_per_year_km)}` : '—'}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </>
+            ) : null}
+          </Card>
+
           {/* How far a vehicle goes on one charge or tank, as it was actually driven. */}
           <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
             <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Longest stretches</Typography>
@@ -998,6 +1106,8 @@ const Analytics = () => {
           categories: (data.expense_categories || []).length > 0,
           providers: (data.providers || []).length > 0,
           stretches: (data.longest_stretches || []).length > 0,
+          distance: (data.monthly_distance || []).length > 0,
+          annualDistance: (data.annual_distance || []).length > 0,
           drilldown: Boolean(drilldown),
         }}
         projectionAvailable={projectionOn}

@@ -703,6 +703,183 @@ def _fetch_longest_stretches(
     ]
 
 
+def _fetch_monthly_distance(
+    cur,
+    user_id: str,
+    db=None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    vehicle_ids: list[int] | None = None,
+    exclude_archived: bool = True,
+) -> list[dict]:
+    """Kilometres driven per vehicle per calendar month.
+
+    Worked out exactly as the trend works out its distance -- each odometer reading
+    minus the one before it, credited to the month of the later reading -- so the
+    bars here add up to the distance the cost-per-100km line was computed from. Like
+    the trend, the lookback is unbounded so the first month in range is not zero.
+    """
+    filters = ['user_id = %s', 'odometer_km IS NOT NULL', 'vehicle_id IS NOT NULL']
+    params: list[object] = [user_id]
+
+    if end_date is not None:
+        filters.append('occurred_at < %s')
+        params.append(end_date.isoformat())
+
+    if vehicle_ids is not None:
+        filters.append('vehicle_id = ANY(%s)')
+        params.append(list(vehicle_ids))
+
+    archived_clause = _active_events_clause(db) if (exclude_archived and db is not None) else ''
+
+    range_clause = ''
+    if start_date is not None:
+        range_clause = ' AND occurred_at >= %s'
+        params.append(start_date.isoformat())
+
+    cur.execute(
+        f"""
+        WITH deltas AS (
+            SELECT
+                vehicle_id,
+                occurred_at,
+                odometer_km - LAG(odometer_km) OVER (
+                    PARTITION BY vehicle_id ORDER BY occurred_at, id
+                ) AS delta_km
+            FROM vehicle_events
+            WHERE {' AND '.join(filters)}{archived_clause}
+        )
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', occurred_at), 'YYYY-MM-DD') AS period,
+            vehicle_id,
+            SUM(GREATEST(delta_km, 0)) AS distance_km
+        FROM deltas
+        WHERE delta_km IS NOT NULL{range_clause}
+        GROUP BY DATE_TRUNC('month', occurred_at), vehicle_id
+        HAVING SUM(GREATEST(delta_km, 0)) > 0
+        ORDER BY period, vehicle_id;
+        """,
+        params,
+    )
+    return [
+        {'period': row['period'], 'vehicle_id': row['vehicle_id'], 'distance_km': _float(row.get('distance_km'))}
+        for row in cur.fetchall()
+    ]
+
+
+# How much odometer history the per-year *average* needs. The per-year columns only
+# need readings in two calendar years -- comparing a short 2025 with 2026 is still a
+# comparison -- but scaling a week either side of New Year up to a year would print a
+# figure nobody drove.
+_ANNUAL_AVG_MIN_SPAN_DAYS = 365
+
+
+def _fetch_annual_distance(
+    cur,
+    user_id: str,
+    db=None,
+    vehicle_ids: list[int] | None = None,
+    exclude_archived: bool = True,
+) -> list[dict]:
+    """Distance per calendar year, for vehicles with readings in two or more years.
+
+    Deliberately ignores the range selector: a yearly figure inside a 90 day range is
+    a contradiction, and the point is the long view. Narrowed by vehicle the same way
+    as everything else, so a subset export covers the subset.
+
+    The first and last year are usually incomplete and are flagged rather than
+    dropped. The first year is listed even when its only reading is the opening one,
+    so it shows as 0 rather than vanishing. The per-year average is total distance
+    over the time actually covered, so partial years do not drag it down, and is left
+    out (None) until a full year is covered.
+    """
+    filters = ['user_id = %s', 'odometer_km IS NOT NULL', 'vehicle_id IS NOT NULL']
+    params: list[object] = [user_id]
+    if vehicle_ids is not None:
+        filters.append('vehicle_id = ANY(%s)')
+        params.append(list(vehicle_ids))
+    archived_clause = _active_events_clause(db) if (exclude_archived and db is not None) else ''
+
+    cur.execute(
+        f"""
+        WITH readings AS (
+            SELECT
+                vehicle_id,
+                occurred_at,
+                odometer_km - LAG(odometer_km) OVER (
+                    PARTITION BY vehicle_id ORDER BY occurred_at, id
+                ) AS delta_km
+            FROM vehicle_events
+            WHERE {' AND '.join(filters)}{archived_clause}
+        ),
+        spans AS (
+            SELECT vehicle_id, MIN(occurred_at) AS first_at, MAX(occurred_at) AS last_at
+            FROM readings
+            GROUP BY vehicle_id
+            HAVING COUNT(DISTINCT EXTRACT(YEAR FROM occurred_at)) >= 2
+        )
+        SELECT
+            r.vehicle_id,
+            COALESCE(v.name, CONCAT(v.make, ' ', v.model)) AS vehicle_name,
+            v.fuel_type,
+            s.first_at,
+            s.last_at,
+            EXTRACT(YEAR FROM r.occurred_at)::int AS year,
+            COALESCE(SUM(GREATEST(r.delta_km, 0)), 0) AS distance_km
+        FROM readings r
+        JOIN spans s ON s.vehicle_id = r.vehicle_id
+        JOIN vehicles v ON v.id = r.vehicle_id AND v.user_id = %s
+        GROUP BY r.vehicle_id, v.name, v.make, v.model, v.fuel_type, s.first_at, s.last_at,
+                 EXTRACT(YEAR FROM r.occurred_at)
+        ORDER BY vehicle_name, r.vehicle_id, year;
+        """,
+        params + [user_id],
+    )
+
+    vehicles: dict[int, dict] = {}
+    for row in cur.fetchall():
+        entry = vehicles.get(row['vehicle_id'])
+        if entry is None:
+            first_at, last_at = row['first_at'], row['last_at']
+            entry = vehicles[row['vehicle_id']] = {
+                'vehicle_id': row['vehicle_id'],
+                'vehicle_name': row['vehicle_name'],
+                'fuel_type': row['fuel_type'],
+                'first_reading': first_at.date().isoformat(),
+                'last_reading': last_at.date().isoformat(),
+                'span_days': (last_at - first_at).days,
+                'years': [],
+            }
+        year = row['year']
+        first_year = date.fromisoformat(entry['first_reading']).year
+        last_year = date.fromisoformat(entry['last_reading']).year
+        entry['years'].append({
+            'year': year,
+            'distance_km': _float(row.get('distance_km')),
+            # A year the readings only partly cover: the first one, unless it started
+            # on 1 January, and the last one, unless it ran to 31 December.
+            'partial': (
+                (year == first_year and entry['first_reading'][5:] != '01-01')
+                or (year == last_year and entry['last_reading'][5:] != '12-31')
+            ),
+        })
+
+    result = []
+    for entry in vehicles.values():
+        total = sum(y['distance_km'] for y in entry['years'])
+        # Readings in two years but no distance between any of them -- a run of
+        # identical or backwards odometers -- leaves nothing to compare.
+        if total <= 0:
+            continue
+        entry['total_distance_km'] = total
+        entry['avg_per_year_km'] = (
+            total / entry['span_days'] * 365.25
+            if entry['span_days'] >= _ANNUAL_AVG_MIN_SPAN_DAYS else None
+        )
+        result.append(entry)
+    return result
+
+
 def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
     """Month buckets keyed 'YYYY-MM', which is what the dashboard looks up by."""
     rows = _fetch_trend_stats(cur, user_id, bucket='month', **kwargs)
@@ -976,6 +1153,13 @@ def get_analytics_summary(
         cur, user_id, db=db, start_date=start_date, end_date=end_date,
         vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
     )
+    monthly_distance = _fetch_monthly_distance(
+        cur, user_id, db=db, start_date=start_date, end_date=end_date,
+        vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
+    )
+    annual_distance = _fetch_annual_distance(
+        cur, user_id, db=db, vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
+    )
 
     return {
         'range': normalized_range,
@@ -986,6 +1170,8 @@ def get_analytics_summary(
         'vehicle_stats': serialized_vehicle_stats,
         'providers': providers,
         'longest_stretches': longest_stretches,
+        'monthly_distance': monthly_distance,
+        'annual_distance': annual_distance,
         'expense_categories': [
             {
                 'category': row['category'],

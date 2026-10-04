@@ -154,6 +154,13 @@ export function AnalyticsSkeleton() {
         </Stack>
       </Card>
 
+      {/* Distance driven: monthly chart. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Skeleton variant="text" width={160} height={30} />
+        <Skeleton variant="text" width="75%" height={20} sx={{ mb: 2 }} />
+        <Skeleton variant="rounded" sx={{ height: { xs: 220, sm: 280 } }} />
+      </Card>
+
       {/* Longest stretches: three tiles. */}
       <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
         <Skeleton variant="text" width={170} height={30} />

@@ -44,7 +44,9 @@ import { formatCategoryLabel } from '../utils/expenseCategories';
 import { StackTopBar } from '../utils/chartShapes';
 import {
   BUCKET_NOUN,
+  annualDistanceYears,
   buildColumns,
+  buildMonthlyDistance,
   buildProviderSlices,
   buildTickLabel,
   buildTooltipLabel,
@@ -212,6 +214,14 @@ const AnalyticsReport = ({
   const categoryTotal = categories.reduce((sum, c) => sum + Number(c.total_amount || 0), 0) || 1;
   const providers = data.providers || [];
   const stretches = data.longest_stretches || [];
+  const distance = buildMonthlyDistance(data.monthly_distance, stats, fmt, series, theme.tail);
+  const distanceKeys = distance.series.map((entry) => entry.key);
+  const annual = data.annual_distance || [];
+  const annualYears = annualDistanceYears(annual);
+  const monthTick = buildTickLabel('month');
+  const monthLabel = buildTooltipLabel('month');
+  // Already converted to the account's unit by buildMonthlyDistance.
+  const wholeUnits = (value) => Math.round(Number(value || 0)).toLocaleString();
   const columns = buildColumns(fmt);
 
   const tickLabel = buildTickLabel(trendBucket);
@@ -516,6 +526,96 @@ const AnalyticsReport = ({
           <ProviderBlock slices={energySlices} valueHeader="Energy"
             formatValue={fmt.energy} formatRate={(rate) => `${huf(rate)} / kWh`}
             empty="No charging with a recorded kWh figure in this range." theme={theme} />
+        </Section>
+      ) : null}
+
+      {distance.months.length && shows('distanceChart') ? (
+        <Section title="Distance driven — by month"
+          note={`From odometer readings, in ${fmt.distanceShort}. A gap between readings lands in the month that closes it. Totals above each column.`}>
+          <ComposedChart width={CHART_W} height={DRILLDOWN_H} data={distance.months} margin={{ top: 22, left: 4, right: 8 }}>
+            <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.rule} />
+            <XAxis dataKey="period" tickFormatter={monthTick} axisLine={false} tickLine={false}
+              interval={distance.months.length > 16 ? 'preserveStartEnd' : 0} minTickGap={12}
+              tick={{ fill: inkMuted, fontSize: 10 }} />
+            <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={46}
+              tick={{ fill: inkMuted, fontSize: 10 }} />
+            {distance.series.map((entry, index) => (
+              <Bar key={entry.key} dataKey={entry.key} stackId="distance" fill={entry.color}
+                shape={<StackTopBar above={distanceKeys.slice(index + 1)} />} isAnimationActive={false}>
+                {index === distance.series.length - 1 ? (
+                  <LabelList content={<StackTotalLabel rows={distance.months} keys={distanceKeys} format={wholeUnits} fill={ink} />} />
+                ) : null}
+              </Bar>
+            ))}
+          </ComposedChart>
+          {distance.series.length > 1 ? (
+            <p className="pr-legend">
+              {distance.series.map((entry) => (
+                <span key={entry.key}><Swatch color={entry.color} />{entry.name}</span>
+              ))}
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
+
+      {distance.months.length && shows('distanceChart') ? (
+        <Section title="Distance driven — every month">
+          <table className="pr-table pr-table-full">
+            <thead>
+              <tr>
+                <th>Month</th>
+                {distance.series.map((entry) => <th key={entry.key} className="pr-num">{entry.name}</th>)}
+                {distance.series.length > 1 ? <th className="pr-num">Total</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {distance.months.map((row) => (
+                <tr key={row.period}>
+                  <td>{monthLabel(row.period)}</td>
+                  {distance.series.map((entry) => (
+                    <td key={entry.key} className="pr-num">{row[entry.key] ? wholeUnits(row[entry.key]) : '—'}</td>
+                  ))}
+                  {distance.series.length > 1 ? <td className="pr-num"><strong>{wholeUnits(row.total)}</strong></td> : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      ) : null}
+
+      {annual.length && shows('distanceAnnual') ? (
+        <Section title="Distance driven — by year"
+          note="Whole history, whatever the range. Vehicles with readings in at least two calendar years. Italic years are only partly covered; the average uses the time actually covered and appears once a full year is on record.">
+          <table className="pr-table pr-table-full">
+            <thead>
+              <tr>
+                <th>Vehicle</th>
+                {annualYears.map((year) => <th key={year} className="pr-num">{year}</th>)}
+                <th className="pr-num">Per year</th>
+              </tr>
+            </thead>
+            <tbody>
+              {annual.map((vehicle) => {
+                const byYear = new Map(vehicle.years.map((y) => [y.year, y]));
+                return (
+                  <tr key={vehicle.vehicle_id}>
+                    <td>{`${vehicle.vehicle_name} (${vehicle.fuel_type})`}</td>
+                    {annualYears.map((year) => {
+                      const entry = byYear.get(year);
+                      return (
+                        <td key={year} className="pr-num" style={entry?.partial ? { fontStyle: 'italic' } : undefined}>
+                          {entry ? fmt.distance(entry.distance_km) : '—'}
+                        </td>
+                      );
+                    })}
+                    <td className="pr-num">
+                      {vehicle.avg_per_year_km != null ? <strong>≈ {fmt.distance(vehicle.avg_per_year_km)}</strong> : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </Section>
       ) : null}
 

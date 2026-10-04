@@ -206,3 +206,63 @@ export const describeStretch = (stretch, fmt) => {
     refill,
   };
 };
+
+// As many vehicles get their own colour as a palette has series colours; the rest
+// share one grey stack. Five, not six: the sixth would repeat the first.
+export const DISTANCE_SERIES = 5;
+
+/**
+ * Monthly distance as stacked-bar rows, one key per vehicle, already in the account's
+ * distance unit — bar heights are drawn from these numbers, so they cannot stay in km.
+ *
+ * Vehicles are ordered by total distance so the colours go to the ones doing the
+ * driving. Every month in between is filled in with zero, so a month the fleet stood
+ * still reads as a gap rather than being skipped over on the axis.
+ */
+export const buildMonthlyDistance = (rows, vehicleStats, fmt, colors, tailColor) => {
+  const names = new Map((vehicleStats || []).map((v) => [v.id, v.name]));
+  const totals = new Map();
+  (rows || []).forEach((row) => {
+    totals.set(row.vehicle_id, (totals.get(row.vehicle_id) || 0) + row.distance_km);
+  });
+  const ordered = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  const ownSeries = ordered.length > DISTANCE_SERIES ? ordered.slice(0, DISTANCE_SERIES - 1) : ordered;
+  const tailIds = new Set(ordered.slice(ownSeries.length));
+
+  const series = ownSeries.map((id, index) => ({
+    key: `v${id}`,
+    name: names.get(id) || `Vehicle ${id}`,
+    color: colors[index % colors.length],
+  }));
+  if (tailIds.size) {
+    series.push({ key: 'tail', name: `${tailIds.size} more`, color: tailColor });
+  }
+
+  const byPeriod = new Map();
+  (rows || []).forEach((row) => {
+    const entry = byPeriod.get(row.period) || { period: row.period, total: 0 };
+    const key = tailIds.has(row.vehicle_id) ? 'tail' : `v${row.vehicle_id}`;
+    const value = fmt.rawDistance(row.distance_km);
+    entry[key] = (entry[key] || 0) + value;
+    entry.total += value;
+    byPeriod.set(row.period, entry);
+  });
+
+  const periods = [...byPeriod.keys()].sort();
+  const months = [];
+  if (periods.length) {
+    const cursor = parsePeriod(periods[0]);
+    const last = parsePeriod(periods[periods.length - 1]);
+    while (cursor <= last) {
+      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-01`;
+      months.push(byPeriod.get(key) || { period: key, total: 0 });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+  return { series, months };
+};
+
+/** Every year any qualifying vehicle has a figure for, oldest first: the table's columns. */
+export const annualDistanceYears = (annual) => [
+  ...new Set((annual || []).flatMap((v) => v.years.map((y) => y.year))),
+].sort((a, b) => a - b);
