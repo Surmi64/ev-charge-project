@@ -41,6 +41,19 @@ import { isGeolocationAvailable, useGeolocation, VAGUE_ACCURACY_M } from '../uti
 // account's places arrive most-visited first, so this keeps the ones actually worth
 // offering.
 const SUGGESTION_LIMIT = 6;
+
+// Mirrors PICKED_PLACE_RADIUS_M in backend/places.py: a fix further than this from a
+// place picked by hand belongs to somewhere else, and the pick wins.
+const PICKED_PLACE_RADIUS_M = 1000;
+
+const distanceM = (lat1, lon1, lat2, lon2) => {
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLon = (lon2 - lon1) * rad;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371008.8 * Math.asin(Math.sqrt(a));
+};
 const LocationField = ({ value, onChange, disabled, autoLocate = false }) => {
   const [places, setPlaces] = useState([]);
   const [match, setMatch] = useState(null);
@@ -129,6 +142,27 @@ const LocationField = ({ value, onChange, disabled, autoLocate = false }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoLocate, supported, disabled, locate]);
 
+  // A chip is the user saying where this happened, and that beats whatever the device
+  // reported. When the two are far apart -- typically a record entered afterwards,
+  // with the phone somewhere else by then -- the fix goes, so the form does not show a
+  // coordinate the server would discard anyway. A fix close to the place stays: it
+  // confirms the pick and helps keep the place's position accurate.
+  const handlePick = (place) => {
+    const fixLat = Number(value.latitude);
+    const fixLon = Number(value.longitude);
+    const placeLat = Number(place.latitude);
+    const placeLon = Number(place.longitude);
+    const comparable = value.latitude != null && value.longitude != null
+      && [fixLat, fixLon, placeLat, placeLon].every(Number.isFinite);
+    if (comparable && distanceM(fixLat, fixLon, placeLat, placeLon) > PICKED_PLACE_RADIUS_M) {
+      clear();
+      setMatch(null);
+      onChange({ place_name: place.name, latitude: null, longitude: null, location_accuracy_m: null });
+      return;
+    }
+    onChange({ place_name: place.name });
+  };
+
   const handleClear = () => {
     clear();
     setMatch(null);
@@ -181,9 +215,13 @@ const LocationField = ({ value, onChange, disabled, autoLocate = false }) => {
             helperText={
               suggestions.length
                 ? 'Type a name, tap one below, or let the button fill it in.'
-                : places.length
-                  ? 'No match among your places — this will be saved as a new one.'
-                  : 'Name it once and it will be offered next time.'
+                // A place is a point, so a new name only becomes one when there is a
+                // fix to pin it to. Picking an existing place needs no fix at all.
+                : !hasFix && value.place_name?.trim()
+                  ? 'Not one of your places yet — a new place needs a location, so press the button to save it.'
+                  : places.length
+                    ? 'No match among your places — this will be saved as a new one.'
+                    : 'Name it once and it will be offered next time.'
             }
           />
           <Tooltip
@@ -215,7 +253,7 @@ const LocationField = ({ value, onChange, disabled, autoLocate = false }) => {
                 color={selectedName === place.name.trim().toLowerCase() ? 'primary' : 'default'}
                 label={place.name}
                 disabled={disabled}
-                onClick={() => onChange({ place_name: place.name })}
+                onClick={() => handlePick(place)}
                 aria-label={`Use place ${place.name}`}
               />
             ))}

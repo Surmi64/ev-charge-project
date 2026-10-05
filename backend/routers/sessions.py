@@ -31,15 +31,19 @@ def _location_write(db, user_id, session):
     if not column_exists(db, 'charging_sessions', 'latitude'):
         return {'columns': '', 'placeholders': '', 'set': '', 'values': ()}
 
-    place_id = resolve_place(
+    place_id, keep_fix = resolve_place(
         db, user_id, session.latitude, session.longitude,
         session.location_accuracy_m, session.place_name,
     )
+    # A fix that contradicts the place the user picked is dropped from the record too,
+    # not just kept from moving the place: it says where the phone was when the record
+    # was typed, which is not where the charge happened.
+    fix = (session.latitude, session.longitude, session.location_accuracy_m) if keep_fix else (None, None, None)
     return {
         'columns': ', latitude, longitude, location_accuracy_m, place_id',
         'placeholders': ', %s, %s, %s, %s',
         'set': ', latitude = %s, longitude = %s, location_accuracy_m = %s, place_id = %s',
-        'values': (session.latitude, session.longitude, session.location_accuracy_m, place_id),
+        'values': (*fix, place_id),
     }
 
 

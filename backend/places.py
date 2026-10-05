@@ -29,6 +29,14 @@ MATCH_RADIUS_M = 150.0
 # asked for it, but it will not name a place or create one.
 MAX_TRUSTED_ACCURACY_M = 250.0
 
+# How far a fix may sit from a place the user picked by name and still be taken as
+# having been recorded there. Beyond it the two disagree, and the pick wins: the usual
+# cause is a record entered afterwards, where the phone reports where it is now rather
+# than where the charge happened. Generous next to MATCH_RADIUS_M, because here the
+# question is not "which place is this" -- the user answered that -- but "is this fix
+# about the same trip at all".
+PICKED_PLACE_RADIUS_M = 1000.0
+
 EARTH_RADIUS_M = 6371008.8
 
 
@@ -104,7 +112,11 @@ def count_records_at(db, user_id, place_id) -> int:
 
 
 def resolve_place(db, user_id, latitude, longitude, accuracy_m=None, name=None):
-    """Find or create the place a session belongs to. Returns its id, or None.
+    """Find or create the place a session belongs to.
+
+    Returns `(place_id, keep_fix)`. place_id may be None. keep_fix is False when the
+    fix contradicts a place the user named: the caller then stores the record without
+    coordinates, because they describe somewhere else.
 
     Called from the session write path, so it must never be the reason a record fails to
     save: a coordinate with nothing to match and no name given simply stays a raw fix on
@@ -113,21 +125,39 @@ def resolve_place(db, user_id, latitude, longitude, accuracy_m=None, name=None):
     Does not commit. The caller owns the transaction, and the place must appear or not
     appear together with the session that created it.
     """
+    cleaned = (name or '').strip()[:120]
+    cur = db.cursor()
+
     if latitude is None or longitude is None:
-        return None
+        # A name with no fix -- picking a place on a laptop, where there is no GPS.
+        # It still files the record against a place already on the list; it just has
+        # no position to vote with, so the place's coordinates and visit_count stay as
+        # they are. A name that is not on the list yet cannot become a place here,
+        # because a place is a point and there is no point to give it.
+        if not cleaned:
+            return None, True
+        cur.execute('SELECT id FROM places WHERE user_id = %s AND LOWER(name) = LOWER(%s);', (user_id, cleaned))
+        existing = cur.fetchone()
+        return (existing['id'] if existing else None), True
 
     latitude, longitude = float(latitude), float(longitude)
     trusted = accuracy_m is None or float(accuracy_m) <= MAX_TRUSTED_ACCURACY_M
-    cleaned = (name or '').strip()[:120]
-
-    cur = db.cursor()
 
     # An explicit name wins over proximity. Someone typing "Otthon" at a spot the phone
     # placed 200 m off is correcting us, not describing somewhere new.
     if cleaned:
-        cur.execute('SELECT id FROM places WHERE user_id = %s AND LOWER(name) = LOWER(%s);', (user_id, cleaned))
+        cur.execute(
+            'SELECT id, latitude, longitude FROM places WHERE user_id = %s AND LOWER(name) = LOWER(%s);',
+            (user_id, cleaned),
+        )
         existing = cur.fetchone()
         if existing:
+            # The pick wins over a fix that is nowhere near it. Letting that fix vote
+            # once dragged a charger 13 km down the road -- a record entered at home a
+            # day later, carrying home's coordinates under the charger's name.
+            distance = haversine_m(latitude, longitude, float(existing['latitude']), float(existing['longitude']))
+            if distance > PICKED_PLACE_RADIUS_M:
+                return existing['id'], False
             # Nudge the stored point toward the newest fix rather than replacing it, so
             # one bad reading cannot move a place across the street. Only trusted fixes
             # get a vote.
@@ -143,10 +173,10 @@ def resolve_place(db, user_id, latitude, longitude, accuracy_m=None, name=None):
                     """,
                     (latitude, longitude, existing['id']),
                 )
-            return existing['id']
+            return existing['id'], True
 
     if not trusted:
-        return None
+        return None, True
 
     nearest = find_nearest_place(db, user_id, latitude, longitude)
     if nearest and not cleaned:
@@ -161,12 +191,12 @@ def resolve_place(db, user_id, latitude, longitude, accuracy_m=None, name=None):
             """,
             (latitude, longitude, nearest['id']),
         )
-        return nearest['id']
+        return nearest['id'], True
 
     if not cleaned:
         # A coordinate nobody has named is not yet a place. Creating "Place 7" here would
         # fill the list with entries the user never asked for and cannot tell apart.
-        return None
+        return None, True
 
     cur.execute(
         """
@@ -176,7 +206,7 @@ def resolve_place(db, user_id, latitude, longitude, accuracy_m=None, name=None):
         """,
         (user_id, cleaned, latitude, longitude),
     )
-    return cur.fetchone()['id']
+    return cur.fetchone()['id'], True
 
 
 def place_name_for(db, place_id):
