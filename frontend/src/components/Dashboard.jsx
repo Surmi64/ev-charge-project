@@ -7,23 +7,10 @@ import {
   Chip,
   Divider,
   IconButton,
-  LinearProgress,
   Stack,
   Typography,
-  useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import {
   Add as AddIcon,
   ArrowDownward as DownIcon,
@@ -41,15 +28,8 @@ import { getCategoryChipSx } from '../utils/categoryVisuals';
 import { formatCategoryLabel } from '../utils/expenseCategories';
 import { createFormatters } from '../utils/units';
 import { pluralize } from '../utils/plural';
-import { StackTopBar } from '../utils/chartShapes';
 import { DashboardSkeleton } from './SectionSkeletons';
 import RecordDialog from './RecordDialog';
-
-const monthLabel = (value) => {
-  if (!value) return '';
-  const [year, month] = value.split('-');
-  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString(undefined, { month: 'short' });
-};
 
 /** Percentage change, framed so "good" depends on the metric. */
 const getDelta = (current, previous, preference = 'lower') => {
@@ -76,7 +56,7 @@ const DeltaChip = ({ delta }) => {
       <Typography variant="body2" fontWeight={700} sx={{ color }}>
         {Math.abs(delta.percent)}%
       </Typography>
-      <Typography variant="body2" color="text.secondary">vs last month</Typography>
+      <Typography variant="body2" color="text.secondary">vs the 30 days before</Typography>
     </Stack>
   );
 };
@@ -100,23 +80,22 @@ const SectionTitle = ({ children, action }) => (
 );
 
 /**
- * What needs attention, what the month cost, what just happened — in that order.
+ * What needs attention, what the last 30 days cost, what just happened and what is
+ * coming — in that order. Anything that looks back further belongs to Analytics.
  *
  * The previous layout led with six KPI cards, two of which ("This Month Cost" and
- * "Operating Cost") rendered the very same number under different labels. The month
- * now has one headline figure with the detail underneath it.
+ * "Operating Cost") rendered the very same number under different labels. It later
+ * also carried a twelve-month chart and an all-time cost per vehicle, both of which
+ * Analytics shows in more detail, so the two pages read as one page twice.
  */
 const Dashboard = () => {
   const theme = useTheme();
   const navigate = useNavigate();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const chartAnimation = !useMediaQuery('(prefers-reduced-motion: reduce)');
 
   const { user, updateUser } = useAuth();
   // Money, distance and volume all follow the account's settings.
   const fmt = useMemo(() => createFormatters(user), [user]);
   const huf = fmt.money;
-  const compact = fmt.numberCompact;   // tengelyekre: penznem nelkul
   const [stats, setStats] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -180,8 +159,8 @@ const Dashboard = () => {
     );
   }
 
-  const current = stats.current_month || {};
-  const previous = stats.previous_month || {};
+  const current = stats.last_30_days || {};
+  const previous = stats.previous_30_days || {};
   const alerts = stats.alerts || [];
   const alertIds = alerts.map((alert) => alert.id).filter(Boolean);
   const visibleAlerts = alerts.filter((alert) => !alert.id || !dismissed.includes(alert.id));
@@ -198,7 +177,6 @@ const Dashboard = () => {
   };
   const reminders = stats.upcoming_reminders || [];
   const recent = stats.recent_activity || [];
-  const fleet = stats.vehicle_stats || [];
 
   if ((stats.total_records || 0) === 0) {
     return (
@@ -229,21 +207,13 @@ const Dashboard = () => {
     { label: `Cost ${fmt.perDistanceLabel}`, value: fmt.moneyPerHundred(current.avg_cost_per_100km), hint: `${fmt.distance(current.total_distance_km)} tracked`, color: theme.palette.warning.main },
   ];
 
-  const tooltipStyle = {
-    borderRadius: 12,
-    backgroundColor: theme.palette.background.paper,
-    border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
-  };
-
-  const maxFleetCost = Math.max(...fleet.map((v) => Number(v.total_cost || 0)), 1);
-
   return (
     <Box className="section-shell stagger">
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
         <Box>
           <Typography variant="h4" component="h1" fontWeight="800" sx={{ mb: 0.5 }}>Dashboard</Typography>
           <Typography variant="body1" color="text.secondary">
-            {new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' })} so far.
+            What needs attention, and the last 30 days.
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>Add record</Button>
@@ -294,7 +264,10 @@ const Dashboard = () => {
 
       {/* 2. One headline number for the month, then the detail behind it. */}
       <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
-        <Typography variant="body2" color="text.secondary">Total this month</Typography>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+          <Typography variant="body2" color="text.secondary">Last 30 days</Typography>
+          <Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/analytics')}>Analytics</Button>
+        </Stack>
         <Stack direction="row" spacing={2} alignItems="baseline" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
           <Typography variant="h3" component="div" fontWeight={800} sx={{ lineHeight: 1.1 }}>
             {huf(current.total_cost)}
@@ -315,44 +288,14 @@ const Dashboard = () => {
         </Box>
       </Card>
 
-      {/* 3. The trend behind the headline. */}
-      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
-        <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/analytics')}>Analytics</Button>}>
-          Last 12 months
-        </SectionTitle>
-        <Box sx={{ width: '100%', height: isMobile ? 220 : 300 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={stats.monthly_stats || []} margin={{ left: 4, right: 4 }}>
-              <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-              <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false}
-                tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-              <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
-                tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-              <Tooltip
-                cursor={{ fill: alpha(theme.palette.primary.main, 0.06) }}
-                contentStyle={tooltipStyle}
-                formatter={(value, name) => [huf(value), name]}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
-              <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
-                shape={<StackTopBar above={['expense_cost']} />}
-                fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-              <Bar dataKey="expense_cost" name="Other costs" stackId="cost"
-                shape={<StackTopBar />}
-                fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Box>
-      </Card>
-
-      {/* 4. What just happened, and what is coming. */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
+      {/* 3. What just happened, and what is coming. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
         <Card sx={{ p: 3, borderRadius: 4 }}>
           <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/activity')}>All records</Button>}>
             Recent
           </SectionTitle>
           {recent.length === 0 ? (
-            <Typography color="text.secondary" variant="body2">Nothing logged yet this month.</Typography>
+            <Typography color="text.secondary" variant="body2">Nothing logged yet.</Typography>
           ) : (
             <Stack divider={<Divider />}>
               {recent.slice(0, 5).map((item) => (
@@ -412,33 +355,6 @@ const Dashboard = () => {
           )}
         </Card>
       </Box>
-
-      {/* 5. Where the money goes across the fleet. */}
-      {fleet.length > 0 ? (
-        <Card sx={{ p: 3, borderRadius: 4 }}>
-          <SectionTitle action={<Button size="small" endIcon={<ChevronIcon />} onClick={() => navigate('/vehicles')}>Vehicles</Button>}>
-            Cost by vehicle, all time
-          </SectionTitle>
-          <Stack spacing={2}>
-            {fleet.map((vehicle) => (
-              <Box key={vehicle.id}>
-                <Stack direction="row" justifyContent="space-between" spacing={1} sx={{ mb: 0.5 }}>
-                  <Typography variant="body2" fontWeight={700} noWrap>{vehicle.name}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                    {huf(vehicle.total_cost)}
-                    {vehicle.cost_per_100km ? ` · ${fmt.moneyPerHundred(vehicle.cost_per_100km)} ${fmt.perDistanceLabel}` : ''}
-                  </Typography>
-                </Stack>
-                <LinearProgress
-                  variant="determinate"
-                  value={(Number(vehicle.total_cost || 0) / maxFleetCost) * 100}
-                  sx={{ height: 8, borderRadius: 4 }}
-                />
-              </Box>
-            ))}
-          </Stack>
-        </Card>
-      ) : null}
 
       <RecordDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={load} vehicles={vehicles} editing={null} />
     </Box>

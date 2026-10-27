@@ -25,6 +25,18 @@ except ModuleNotFoundError:
 # still allows viewing and CSV export so a lapsed user keeps access to their data.
 WRITE_ALLOWED_STATUSES = {'trialing', 'active'}
 
+# What an admin account sees in place of its subscription row. Admins run the
+# service, so their plan never lapses; nothing is written, so demoting the account
+# back to 'user' returns it to whatever its stored row says.
+ADMIN_SUBSCRIPTION = {
+    'plan': 'admin',
+    'status': 'active',
+    'trial_ends_at': None,
+    'current_period_end': None,
+    'cancel_at_period_end': False,
+    'exempt': True,
+}
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -32,6 +44,12 @@ def _now():
 
 def ensure_subscription(db, user_id) -> dict:
     """Return the user's subscription, starting a trial if they have none."""
+    cur = db.cursor()
+    cur.execute('SELECT role FROM users WHERE id = %s LIMIT 1;', (user_id,))
+    user = cur.fetchone()
+    if user and user.get('role') == 'admin':
+        return dict(ADMIN_SUBSCRIPTION)
+
     if not table_exists(db, 'subscriptions'):
         # Database predates the billing migration: treat as unrestricted.
         return {
@@ -42,7 +60,6 @@ def ensure_subscription(db, user_id) -> dict:
             'cancel_at_period_end': False,
         }
 
-    cur = db.cursor()
     cur.execute('SELECT * FROM subscriptions WHERE user_id = %s LIMIT 1;', (user_id,))
     subscription = cur.fetchone()
 
@@ -108,6 +125,7 @@ def serialize_subscription(subscription: dict) -> dict:
         'cancel_at_period_end': bool(subscription.get('cancel_at_period_end')),
         'can_write': status in WRITE_ALLOWED_STATUSES,
         'days_remaining': days_remaining,
+        'exempt': bool(subscription.get('exempt')),
         'prices': PLAN_PRICES,
     }
 

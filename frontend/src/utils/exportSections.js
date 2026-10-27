@@ -25,7 +25,7 @@ export const EXPORT_SECTIONS = [
   { id: 'distanceAnnual', label: 'Distance — by year', hint: 'Vehicles with readings in two calendar years.', needs: 'annualDistance' },
   { id: 'stretches', label: 'Longest stretches', hint: 'Most distance between two refills.', needs: 'stretches' },
   { id: 'vehicleTable', label: 'All figures', hint: 'One row per vehicle.' },
-  { id: 'drilldown', label: 'Single vehicle', hint: 'The vehicle selected on the page.', needs: 'drilldown' },
+  { id: 'drilldown', label: 'Single vehicle', hint: 'Available when the page is filtered to one vehicle.', needs: 'drilldown' },
 ];
 
 export const DEFAULT_EXPORT_SECTIONS = EXPORT_SECTIONS.map((section) => section.id);

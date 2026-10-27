@@ -1,121 +1,157 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Paper, Typography, TextField, Button, Divider, CircularProgress, Chip, Stack, List, ListItem, ListItemButton, ListItemIcon, ListItemText, useTheme } from '@mui/material';
+import { Box, Paper, Typography, TextField, Button, CircularProgress, Chip, Stack, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Tab, Tabs, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
 import ClimateSettings from './ClimateSettings';
 import FuelComparisonSettings from './FuelComparisonSettings';
 import AppearanceSettings from './AppearanceSettings';
+import PasswordField from './PasswordField';
 import { toast } from 'sonner';
-import PersonIcon from '@mui/icons-material/Person';
-import SecurityIcon from '@mui/icons-material/Security';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getSettingsItems } from '../utils/settingsNav';
 import { apiFetch } from '../utils/api';
 
-const Profile = () => {
-    const { token, user, updateUser, loading: authLoading } = useAuth();
-    const navigate = useNavigate();
-    const settingsItems = getSettingsItems(user);
-    const theme = useTheme();
-    const [loading, setLoading] = useState(false);
-    const [securityLoading, setSecurityLoading] = useState(true);
-    const [securityLog, setSecurityLog] = useState([]);
-    const [formData, setFormData] = useState({
-        username: user?.username || '',
-        email: user?.email || '',
-        current_password: '',
-        new_password: '',
-        confirm_password: ''
-    });
+// The page used to be seven cards stacked in one column, each with its own Save
+// button, which read as a pile rather than as settings. The tab lives in the URL,
+// like Records, so a link can point straight at one of them.
+const TABS = [
+    { value: 'profile', label: 'Profile' },
+    { value: 'display', label: 'Display' },
+    { value: 'calculations', label: 'Calculations' },
+    { value: 'security', label: 'Security' },
+];
+const TAB_VALUES = TABS.map((tab) => tab.value);
+
+const formatEventLabel = (value) => value.replace(/_/g, ' ');
+
+const ProfileForm = ({ user, updateUser }) => {
+    const [username, setUsername] = useState(user.username || '');
+    const [email, setEmail] = useState(user.email || '');
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        setFormData((prev) => ({
-            ...prev,
-            username: user?.username || '',
-            email: user?.email || '',
-        }));
-    }, [user]);
+        setUsername(user.username || '');
+        setEmail(user.email || '');
+    }, [user.username, user.email]);
 
-    useEffect(() => {
-        const fetchSecurityLog = async () => {
-            if (!token) {
-                setSecurityLoading(false);
-                return;
-            }
+    // The password is asked for only when the email changes: the email is what a
+    // password reset goes to, so changing it is how an account gets taken over.
+    // The display name carries no such weight.
+    const emailChanged = email.trim() !== (user.email || '');
+    const dirty = emailChanged || username.trim() !== (user.username || '');
 
-            try {
-                const res = await apiFetch('/api/auth/security-log?limit=10');
-                if (!res.ok) throw new Error('Failed to load security activity');
-                setSecurityLog(await res.json());
-            } catch {
-                toast.error('Failed to load security activity');
-            } finally {
-                setSecurityLoading(false);
-            }
-        };
-
-        fetchSecurityLog();
-    }, [token]);
-
-    if (authLoading || !user) {
-        return <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>;
-    }
-
-    const handleChange = (e) => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
-    };
-
-    const handleUpdate = async (e) => {
-        e.preventDefault();
-
-        if (formData.new_password && formData.new_password !== formData.confirm_password) {
-            toast.error('New passwords do not match');
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        if (emailChanged && !currentPassword) {
+            toast.error('Enter your current password to change the email address');
             return;
         }
-
-        if (!formData.current_password) {
-            toast.error('Current password is required to make changes');
-            return;
-        }
-
-        setLoading(true);
+        setSaving(true);
         try {
             const res = await apiFetch('/api/auth/me', {
                 method: 'PATCH',
                 body: JSON.stringify({
-                    username: formData.username !== user.username ? formData.username : undefined,
-                    email: formData.email !== user.email ? formData.email : undefined,
-                    current_password: formData.current_password,
-                    new_password: formData.new_password || undefined
-                })
+                    username: username.trim() !== user.username ? username.trim() : undefined,
+                    email: emailChanged ? email.trim() : undefined,
+                    current_password: emailChanged ? currentPassword : undefined,
+                }),
             });
-
-            const data = await res.json();
-            if (res.ok) {
-                toast.success('Profile updated successfully');
-                updateUser({
-                    username: formData.username,
-                    email: formData.email,
-                });
-                const securityRes = await apiFetch('/api/auth/security-log?limit=10');
-                if (securityRes.ok) {
-                    setSecurityLog(await securityRes.json());
-                }
-                // Reset password fields
-                setFormData(prev => ({ ...prev, current_password: '', new_password: '', confirm_password: '' }));
-            } else {
-                toast.error(data.detail || 'Failed to update profile');
-            }
-        } catch {
-            toast.error('Communication error with server');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Could not save your profile');
+            updateUser({ username: username.trim(), email: email.trim() });
+            setCurrentPassword('');
+            toast.success('Profile saved');
+        } catch (error) {
+            toast.error(error.message);
         } finally {
-            setLoading(false);
+            setSaving(false);
         }
     };
 
-    const formatEventLabel = (value) => value.replace(/_/g, ' ');
+    return (
+        <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper' }}>
+            <Typography variant="h6" gutterBottom>Profile</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Member since {new Date(user.created_at).toLocaleDateString()}.
+            </Typography>
+            <form onSubmit={handleSubmit}>
+                <TextField fullWidth label="Username" value={username}
+                    onChange={(event) => setUsername(event.target.value)} margin="normal" autoComplete="username" />
+                <TextField fullWidth label="Email" type="email" value={email}
+                    onChange={(event) => setEmail(event.target.value)} margin="normal" autoComplete="email" />
+                {emailChanged ? (
+                    <Box sx={{ mt: 2 }}>
+                        <PasswordField
+                            label="Current password"
+                            value={currentPassword}
+                            onChange={(event) => setCurrentPassword(event.target.value)}
+                            helperText="Needed to change the email address."
+                        />
+                    </Box>
+                ) : null}
+                <Button type="submit" variant="contained" disabled={!dirty || saving} sx={{ mt: 2.5 }}>
+                    {saving ? 'Saving…' : 'Save profile'}
+                </Button>
+            </form>
+        </Paper>
+    );
+};
+
+const PasswordForm = ({ onChanged }) => {
+    const [form, setForm] = useState({ current: '', next: '', confirm: '' });
+    const [saving, setSaving] = useState(false);
+    const set = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
+    const mismatch = Boolean(form.confirm) && form.next !== form.confirm;
+
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        if (form.next !== form.confirm) {
+            toast.error('New passwords do not match');
+            return;
+        }
+        setSaving(true);
+        try {
+            const res = await apiFetch('/api/auth/me', {
+                method: 'PATCH',
+                body: JSON.stringify({ current_password: form.current, new_password: form.next }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Could not change the password');
+            setForm({ current: '', next: '', confirm: '' });
+            toast.success('Password changed');
+            onChanged();
+        } catch (error) {
+            toast.error(error.message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper' }}>
+            <Typography variant="h6" gutterBottom>Password</Typography>
+            <form onSubmit={handleSubmit}>
+                <Stack spacing={2} sx={{ mt: 1.5 }}>
+                    <PasswordField label="Current password" value={form.current} onChange={set('current')} />
+                    <PasswordField label="New password" value={form.next} onChange={set('next')}
+                        autoComplete="new-password" showPolicy />
+                    <PasswordField label="Confirm new password" value={form.confirm} onChange={set('confirm')}
+                        autoComplete="new-password" error={mismatch ? 'Does not match the new password' : undefined} />
+                </Stack>
+                <Button type="submit" variant="contained" sx={{ mt: 2.5 }}
+                    disabled={saving || !form.current || !form.next || mismatch}>
+                    {saving ? 'Changing…' : 'Change password'}
+                </Button>
+            </form>
+        </Paper>
+    );
+};
+
+const SecurityLog = ({ entries, loading }) => {
+    const theme = useTheme();
 
     // These were the dark-mode brand green, red and amber written out by hand, which
     // meant the audit-log chips kept their neons in light mode and landed near 1:1.
@@ -132,12 +168,101 @@ const Profile = () => {
     };
 
     return (
-        <Box className="section-shell stagger" sx={{ maxWidth: 1100, mx: 'auto' }}>
-            <Typography variant="h4" component="h1" fontWeight={800} sx={{ mb: 1 }}>
-                Profile Settings
+        <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper' }}>
+            <Typography variant="h6" gutterBottom>Recent activity</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.75 }}>
+                Sign-ins, password resets and profile changes on this account.
             </Typography>
 
-            <Stack spacing={3} sx={{ maxWidth: 760, mx: 'auto' }}>
+            {loading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                    <CircularProgress size={28} />
+                </Box>
+            ) : entries.length ? (
+                <Stack spacing={1}>
+                    {entries.map((entry) => (
+                        <Box key={entry.id} sx={{ p: 1.5, borderRadius: 3, border: '1px solid', borderColor: 'divider', backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.02 : 0.03) }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.25, mb: 0.75 }}>
+                                <Box>
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 700, textTransform: 'capitalize', lineHeight: 1.3 }}>
+                                        {formatEventLabel(entry.event_type)}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                        {entry.created_at ? new Date(entry.created_at).toLocaleString() : 'Unknown time'}
+                                    </Typography>
+                                </Box>
+                                <Chip size="small" label={entry.status} variant="outlined" sx={getStatusChipSx(entry.status)} />
+                            </Box>
+                            {entry.ip_address ? (
+                                <Typography variant="body2" color="text.secondary">
+                                    IP: {entry.ip_address}
+                                </Typography>
+                            ) : null}
+                            {entry.details && Object.keys(entry.details).length ? (
+                                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.35, wordBreak: 'break-word' }}>
+                                    {Object.entries(entry.details).map(([key, value]) => `${formatEventLabel(key)}: ${String(value)}`).join(' • ')}
+                                </Typography>
+                            ) : null}
+                        </Box>
+                    ))}
+                </Stack>
+            ) : (
+                <Typography color="text.secondary">No recent security activity recorded yet.</Typography>
+            )}
+        </Paper>
+    );
+};
+
+const Profile = () => {
+    const { token, user, updateUser, loading: authLoading } = useAuth();
+    const navigate = useNavigate();
+    const settingsItems = getSettingsItems(user);
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tab = TAB_VALUES.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'profile';
+    const [securityLoading, setSecurityLoading] = useState(true);
+    const [securityLog, setSecurityLog] = useState([]);
+
+    const setTab = (next) => {
+        const params = new URLSearchParams(searchParams);
+        if (next === 'profile') params.delete('tab');
+        else params.set('tab', next);
+        setSearchParams(params, { replace: true });
+    };
+
+    const fetchSecurityLog = React.useCallback(async () => {
+        if (!token) {
+            setSecurityLoading(false);
+            return;
+        }
+        try {
+            const res = await apiFetch('/api/auth/security-log?limit=10');
+            if (!res.ok) throw new Error('Failed to load security activity');
+            setSecurityLog(await res.json());
+        } catch {
+            toast.error('Failed to load security activity');
+        } finally {
+            setSecurityLoading(false);
+        }
+    }, [token]);
+
+    useEffect(() => { fetchSecurityLog(); }, [fetchSecurityLog]);
+
+    if (authLoading || !user) {
+        return <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>;
+    }
+
+    return (
+        <Box className="section-shell stagger">
+            <Typography variant="h4" component="h1" fontWeight={800} sx={{ mb: 0.5 }}>
+                Account
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                Your profile, how figures are shown, and what the forecasts assume.
+            </Typography>
+
+            {/* minWidth 0: a scrollable Tabs reports its full content width as its
+                minimum, and without this the column grows to fit it on a phone. */}
+            <Stack spacing={3} sx={{ maxWidth: 760, minWidth: 0 }}>
                 {/* Mobile only. On desktop these sit in the sidebar, and repeating them
                     here would give one screen two ways to reach the same page; below
                     `sm` the sidebar is hidden and this is the only way in. */}
@@ -169,162 +294,40 @@ const Profile = () => {
                     </Paper>
                 ) : null}
 
-                <Paper sx={{ p: 3, borderRadius: 4, boxShadow: `0 0 24px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                        <PersonIcon color="primary" sx={{ mr: 1 }} />
-                        <Typography variant="h6">General Information</Typography>
-                    </Box>
-                    <form onSubmit={handleUpdate}>
-                        <TextField
-                            fullWidth
-                            label="Username"
-                            name="username"
-                            value={formData.username}
-                            onChange={handleChange}
-                            margin="normal"
-                        />
-                        <TextField
-                            fullWidth
-                            label="Email"
-                            name="email"
-                            type="email"
-                            value={formData.email}
-                            onChange={handleChange}
-                            margin="normal"
-                        />
+                <Box sx={{ minWidth: 0 }}>
+                    <Tabs value={tab} onChange={(_, next) => setTab(next)} variant="scrollable" allowScrollButtonsMobile sx={{ mb: 2 }}>
+                        {TABS.map((item) => <Tab key={item.value} value={item.value} label={item.label} />)}
+                    </Tabs>
 
-                        <Divider sx={{ my: 3 }} />
-
-                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                            <SecurityIcon color="primary" sx={{ mr: 1 }} />
-                            <Typography variant="h6">Security & Password</Typography>
-                        </Box>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                            To update your profile or change password, please provide your current password.
-                        </Typography>
-
-                        <TextField
-                            fullWidth
-                            label="New Password (optional)"
-                            name="new_password"
-                            type="password"
-                            value={formData.new_password}
-                            onChange={handleChange}
-                            margin="normal"
-                        />
-                        <TextField
-                            fullWidth
-                            label="Confirm New Password"
-                            name="confirm_password"
-                            type="password"
-                            value={formData.confirm_password}
-                            onChange={handleChange}
-                            margin="normal"
-                        />
-
-                        <TextField
-                            fullWidth
-                            required
-                            label="Current Password"
-                            name="current_password"
-                            type="password"
-                            value={formData.current_password}
-                            onChange={handleChange}
-                            margin="normal"
-                            sx={{ mt: 2 }}
-                        />
-
-                        <Button
-                            type="submit"
-                            variant="contained"
-                            fullWidth
-                            disabled={loading}
-                            sx={{ mt: 4, py: 1.5 }}
-                        >
-                            {loading ? <CircularProgress size={24} color="inherit" /> : 'Save Changes'}
-                        </Button>
-                    </form>
-                </Paper>
-
-                <AppearanceSettings />
-
-                <UnitSettings />
-
-                <ClimateSettings />
-
-                <FuelComparisonSettings />
-
-                <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper', boxShadow: `0 0 24px ${alpha(theme.palette.secondary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
-                    <Typography className="industrial-kicker" sx={{ mb: 0.5 }}>Telemetry</Typography>
-                    <Typography variant="h6" gutterBottom>Account Metadata</Typography>
-                    <Stack spacing={1.5} sx={{ mt: 1.5 }}>
-                        <Box>
-                            <Typography variant="caption" color="text.secondary" display="block">USER ID</Typography>
-                            <Typography variant="body2" sx={{ fontFamily: 'monospace', letterSpacing: '0.08em' }}>{user?.id}</Typography>
-                        </Box>
-
-                        <Box>
-                            <Typography variant="caption" color="text.secondary" display="block">MEMBER SINCE</Typography>
-                            <Typography variant="body2">{new Date(user?.created_at).toLocaleDateString()}</Typography>
-                        </Box>
-
-                        <Box>
-                            <Typography variant="caption" color="text.secondary" display="block">ACCOUNT TYPE</Typography>
-                            <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 700, textShadow: `0 0 16px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.2 : 0.12)}` }}>Personal account</Typography>
-                        </Box>
-
-                        <Box>
-                            <Typography variant="caption" color="text.secondary" display="block">ROLE</Typography>
-                            <Typography variant="body2" sx={{ color: user?.role === 'admin' ? 'secondary.main' : 'primary.main', fontWeight: 700 }}>
-                                {user?.role || 'user'}
-                            </Typography>
-                        </Box>
-                    </Stack>
-                </Paper>
-
-                <Paper sx={{ p: 2.5, borderRadius: 4, bgcolor: 'background.paper', boxShadow: `0 0 24px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.1)}` }}>
-                    <Typography className="industrial-kicker" sx={{ mb: 0.5 }}>Security</Typography>
-                    <Typography variant="h6" gutterBottom>Recent Security Activity</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1.75 }}>
-                        Recent authentication and account events for this profile.
-                    </Typography>
-
-                    {securityLoading ? (
-                        <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-                            <CircularProgress size={28} />
-                        </Box>
-                    ) : securityLog.length ? (
-                        <Stack spacing={1}>
-                            {securityLog.map((entry) => (
-                                <Box key={entry.id} sx={{ p: 1.5, borderRadius: 3, border: '1px solid', borderColor: 'divider', backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.02 : 0.03) }}>
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.25, mb: 0.75 }}>
-                                        <Box>
-                                            <Typography variant="subtitle2" sx={{ fontWeight: 700, textTransform: 'capitalize', lineHeight: 1.3 }}>
-                                                {formatEventLabel(entry.event_type)}
-                                            </Typography>
-                                            <Typography variant="caption" color="text.secondary">
-                                                {entry.created_at ? new Date(entry.created_at).toLocaleString() : 'Unknown time'}
-                                            </Typography>
-                                        </Box>
-                                        <Chip size="small" label={entry.status} variant="outlined" sx={getStatusChipSx(entry.status)} />
-                                    </Box>
-                                    {entry.ip_address ? (
-                                        <Typography variant="body2" color="text.secondary">
-                                            IP: {entry.ip_address}
-                                        </Typography>
-                                    ) : null}
-                                    {entry.details && Object.keys(entry.details).length ? (
-                                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.35, wordBreak: 'break-word' }}>
-                                            {Object.entries(entry.details).map(([key, value]) => `${formatEventLabel(key)}: ${String(value)}`).join(' • ')}
-                                        </Typography>
-                                    ) : null}
-                                </Box>
-                            ))}
+                    {tab === 'profile' ? (
+                        <Stack spacing={3}>
+                            <ProfileForm user={user} updateUser={updateUser} />
+                            <PasswordForm onChanged={fetchSecurityLog} />
                         </Stack>
-                    ) : (
-                        <Typography color="text.secondary">No recent security activity recorded yet.</Typography>
-                    )}
-                </Paper>
+                    ) : null}
+
+                    {tab === 'display' ? (
+                        <Stack spacing={3}>
+                            <AppearanceSettings />
+                            <UnitSettings />
+                        </Stack>
+                    ) : null}
+
+                    {tab === 'calculations' ? (
+                        <Stack spacing={3}>
+                            <Typography variant="body2" color="text.secondary">
+                                What Analytics assumes when it projects the year and draws the petrol comparison.
+                                Your recorded figures are never changed by these.
+                            </Typography>
+                            <ClimateSettings />
+                            <FuelComparisonSettings />
+                        </Stack>
+                    ) : null}
+
+                    {tab === 'security' ? (
+                        <SecurityLog entries={securityLog} loading={securityLoading} />
+                    ) : null}
+                </Box>
             </Stack>
         </Box>
     );

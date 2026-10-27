@@ -145,8 +145,8 @@ const Figure = ({ label, value, hint, color }) => (
 /**
  * The "why" behind the dashboard's headline.
  *
- * The dashboard answers how this month is going; this page exists to compare and
- * explain, which is why everything here obeys the range selector. It used to render
+ * The dashboard answers how the last 30 days went; this page exists to compare and
+ * explain, which is why everything here obeys the range and vehicle selectors. It used to render
  * vehicle_stats five separate times — two bar charts plus three leaderboards over the
  * same array — so the comparison is now a single sortable table.
  */
@@ -175,8 +175,16 @@ const Analytics = () => {
   const [orderBy, setOrderBy] = useState('total_cost');
   const [order, setOrder] = useState('desc');
   const [metricKey, setMetricKey] = useState('running');
-  const [selectedVehicleId, setSelectedVehicleId] = useState('');
+  // One vehicle, or '' for the whole fleet. It narrows every figure on the page —
+  // there used to be a separate "Single vehicle" card at the bottom instead, which
+  // repeated the page in miniature for one car and left the rest fleet-wide.
+  const [vehicleFilter, setVehicleFilter] = useState('');
+  // The filtered vehicle's own detail, which the PDF export can include. Not drawn on
+  // the page any more: with the filter on, the page itself is that detail.
   const [drilldown, setDrilldown] = useState(null);
+  // The live fleet, for the filter and the export picker. Read separately rather than
+  // from `data.vehicle_stats`, which shrinks to one row once the filter is on.
+  const [fleet, setFleet] = useState([]);
   const [forecast, setForecast] = useState(null);
   // Sold cars, for the export picker only. Analytics itself reports the live fleet, so
   // these are not in `data.vehicle_stats` and have to be asked for separately.
@@ -208,14 +216,11 @@ const Analytics = () => {
   const monthTooltipLabel = useMemo(() => buildTooltipLabel('month'), []);
   const trendNoun = BUCKET_NOUN[trendBucket] || 'month';
 
-  const drilldownBucket = drilldown?.trend_bucket || trendBucket;
-  const drilldownTick = useMemo(() => buildTickLabel(drilldownBucket), [drilldownBucket]);
-  const drilldownTooltipLabel = useMemo(() => buildTooltipLabel(drilldownBucket), [drilldownBucket]);
-
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const res = await apiFetch(`/api/analytics/summary?range=${range}`);
+      const vehicleQuery = vehicleFilter ? `&vehicles=${vehicleFilter}` : '';
+      const res = await apiFetch(`/api/analytics/summary?range=${range}${vehicleQuery}`);
       if (!res.ok) {
         const payload = await res.json().catch(() => null);
         throw new Error(payload?.detail || 'Analytics is unavailable right now');
@@ -230,7 +235,7 @@ const Analytics = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [range]);
+  }, [range, vehicleFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -256,35 +261,25 @@ const Analytics = () => {
       .then((res) => (res.ok ? res.json() : null))
       .then((payload) => {
         if (!active || !Array.isArray(payload)) return;
+        // Same fallback the analytics query applies: `name` is optional, and a
+        // vehicle only ever identified by make and model still needs a label.
+        const label = (v) => v.name || [v.make, v.model].filter(Boolean).join(' ') || 'Vehicle';
+        setFleet(payload.filter((v) => !v.is_archived).map((v) => ({ id: v.id, name: label(v) })));
         setArchivedVehicles(
-          // Same fallback the analytics query applies: `name` is optional, and a
-          // vehicle only ever identified by make and model still needs a label.
-          payload.filter((v) => v.is_archived).map((v) => ({
-            id: v.id,
-            name: v.name || [v.make, v.model].filter(Boolean).join(' ') || 'Vehicle',
-          })),
+          payload.filter((v) => v.is_archived).map((v) => ({ id: v.id, name: label(v) })),
         );
       })
       .catch(() => {});
     return () => { active = false; };
   }, []);
 
-  // Default the drilldown to whichever vehicle leads the current sort.
   useEffect(() => {
-    const stats = data?.vehicle_stats || [];
-    if (!stats.length) { setSelectedVehicleId(''); return; }
-    if (!stats.some((v) => String(v.id) === String(selectedVehicleId))) {
-      setSelectedVehicleId(String(stats[0].id));
-    }
-  }, [data, selectedVehicleId]);
-
-  useEffect(() => {
-    if (!selectedVehicleId) { setDrilldown(null); return; }
-    apiFetch(`/api/analytics/vehicles/${selectedVehicleId}?range=${range}`)
+    if (!vehicleFilter) { setDrilldown(null); return; }
+    apiFetch(`/api/analytics/vehicles/${vehicleFilter}?range=${range}`)
       .then((res) => (res.ok ? res.json() : null))
       .then(setDrilldown)
       .catch(() => setDrilldown(null));
-  }, [selectedVehicleId, range]);
+  }, [vehicleFilter, range]);
 
   const sortedVehicles = useMemo(() => {
     const rows = [...(data?.vehicle_stats || [])];
@@ -318,7 +313,9 @@ const Analytics = () => {
   // The projection only makes sense against monthly buckets: it is produced per month
   // to the end of the year, and pasting months next to daily or weekly bars would put
   // two different time scales on one axis.
-  const projectionOn = trendBucket === 'month' && Boolean(forecast?.available) && (forecast?.months?.length > 0);
+  // Fleet-wide only, too: the forecast cannot be re-cut per vehicle, and projecting
+  // the fleet's spend beside one car's recorded spend would overstate it.
+  const projectionOn = !vehicleFilter && trendBucket === 'month' && Boolean(forecast?.available) && (forecast?.months?.length > 0);
 
   const chartData = useMemo(
     () => buildTrendRows(data?.trend, forecast, projectionOn),
@@ -339,9 +336,12 @@ const Analytics = () => {
     setExporting(true);
     try {
       let reportData = data;
-      if (config.vehicleIds) {
-        const query = config.vehicleIds.map((id) => `vehicles=${id}`).join('&');
-        const res = await apiFetch(`/api/analytics/summary?range=${range}&${query}`);
+      // `data` is the page's view, which the vehicle filter may have narrowed. The
+      // dialog's own picker decides what the file covers, so anything other than an
+      // unfiltered page asking for the whole fleet goes back to the server.
+      if (config.vehicleIds || vehicleFilter) {
+        const query = config.vehicleIds ? `&${config.vehicleIds.map((id) => `vehicles=${id}`).join('&')}` : '';
+        const res = await apiFetch(`/api/analytics/summary?range=${range}${query}`);
         if (!res.ok) throw new Error('Could not read the figures for those vehicles.');
         reportData = await res.json();
       }
@@ -372,7 +372,7 @@ const Analytics = () => {
       toast.error(error.message || 'Could not build the PDF.');
       setExporting(false);
     }
-  }, [data, drilldown, forecast, range]);
+  }, [data, drilldown, forecast, range, vehicleFilter]);
 
   /**
    * Write the report out as a PDF.
@@ -506,6 +506,13 @@ const Analytics = () => {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {fleet.length > 1 ? (
+            <TextField select size="small" label="Vehicle" value={vehicleFilter}
+              onChange={(e) => setVehicleFilter(e.target.value)} sx={{ minWidth: 180 }}>
+              <MenuItem value="">All vehicles</MenuItem>
+              {fleet.map((v) => <MenuItem key={v.id} value={String(v.id)}>{v.name}</MenuItem>)}
+            </TextField>
+          ) : null}
           {rangeSelector}
           {/* Disabled while a file is being written: a second press would remount the
               report underneath the one being rasterised. */}
@@ -541,7 +548,7 @@ const Analytics = () => {
                 hint={`${Math.round(summary.total_energy_kwh || 0).toLocaleString()} kWh charged`}
                 color={theme.palette.success.main} />
             </Box>
-            {forecast?.available ? (
+            {forecast?.available && !vehicleFilter ? (
               <>
                 <Divider sx={{ my: 2 }} />
                 <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap' }}>
@@ -942,10 +949,11 @@ const Analytics = () => {
             </TableContainer>
           </Card>
 
-          {/* Where the money goes. */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
-            <Card sx={{ p: 3, borderRadius: 4 }}>
-              <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Driving vs other costs</Typography>
+          {/* Where the money goes. One card: the categories are the breakdown of the
+              "other costs" bar beside them, and as two cards they read as two answers. */}
+          <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Where the money goes</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
               <Stack spacing={2.5}>
                 {[
                   { label: 'Driving spend', value: summary.session_cost, pct: summary.session_share_pct,
@@ -966,51 +974,51 @@ const Analytics = () => {
                   </Box>
                 ))}
               </Stack>
-            </Card>
 
-            <Card sx={{ p: 3, borderRadius: 4 }}>
-              <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>Cost categories</Typography>
-              {categories.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">No costs recorded in this range.</Typography>
-              ) : (
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
-                  <Box sx={{ width: 168, height: 168, flexShrink: 0 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie data={categories} dataKey="total_amount" nameKey="category"
-                          cx="50%" cy="50%" innerRadius={48} outerRadius={78} paddingAngle={3}
-                          stroke={theme.palette.background.paper} strokeWidth={3}
-                          isAnimationActive={chartAnimation}>
-                          {categories.map((entry, index) => (
-                            <Cell key={entry.category} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        {/* The name is formatted in the formatter, not in labelFormatter:
-                            a pie tooltip has no label, so that one never ran and the row
-                            read "insurance" while the legend beside it read "Insurance". */}
-                        <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle}
-                          formatter={(value, name) => [huf(value), formatCategoryLabel(name)]} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </Box>
-                  <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
-                    {categories.map((entry, index) => (
-                      <Stack key={entry.category} direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                          <Box sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-                            backgroundColor: COLORS[index % COLORS.length] }} />
-                          <Typography variant="body2" noWrap>{formatCategoryLabel(entry.category)}</Typography>
+              <Box>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>Other costs by category</Typography>
+                {categories.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No costs recorded in this range.</Typography>
+                ) : (
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+                    <Box sx={{ width: 168, height: 168, flexShrink: 0 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={categories} dataKey="total_amount" nameKey="category"
+                            cx="50%" cy="50%" innerRadius={48} outerRadius={78} paddingAngle={3}
+                            stroke={theme.palette.background.paper} strokeWidth={3}
+                            isAnimationActive={chartAnimation}>
+                            {categories.map((entry, index) => (
+                              <Cell key={entry.category} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          {/* The name is formatted in the formatter, not in labelFormatter:
+                              a pie tooltip has no label, so that one never ran and the row
+                              read "insurance" while the legend beside it read "Insurance". */}
+                          <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle}
+                            formatter={(value, name) => [huf(value), formatCategoryLabel(name)]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </Box>
+                    <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
+                      {categories.map((entry, index) => (
+                        <Stack key={entry.category} direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                          <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                            <Box sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                              backgroundColor: COLORS[index % COLORS.length] }} />
+                            <Typography variant="body2" noWrap>{formatCategoryLabel(entry.category)}</Typography>
+                          </Stack>
+                          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                            {Math.round((Number(entry.total_amount) / categoryTotal) * 100)}%
+                          </Typography>
                         </Stack>
-                        <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                          {Math.round((Number(entry.total_amount) / categoryTotal) * 100)}%
-                        </Typography>
-                      </Stack>
-                    ))}
+                      ))}
+                    </Stack>
                   </Stack>
-                </Stack>
-              )}
-            </Card>
-          </Box>
+                )}
+              </Box>
+            </Box>
+          </Card>
 
           {/* Who you buy energy from. */}
           <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
@@ -1040,59 +1048,6 @@ const Analytics = () => {
             )}
           </Card>
 
-          {/* Per-vehicle detail. */}
-          <Card sx={{ p: 3, borderRadius: 4 }}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between"
-              alignItems={{ sm: 'center' }} spacing={2} sx={{ mb: 2 }}>
-              <Box>
-                <Typography variant="h6" fontWeight={700}>Single vehicle</Typography>
-                <Typography variant="body2" color="text.secondary">Same range, one vehicle at a time.</Typography>
-              </Box>
-              <TextField select size="small" label="Vehicle" value={selectedVehicleId}
-                onChange={(e) => setSelectedVehicleId(e.target.value)} sx={{ minWidth: 200 }}>
-                {(data.vehicle_stats || []).map((v) => (
-                  <MenuItem key={v.id} value={String(v.id)}>{v.name}</MenuItem>
-                ))}
-              </TextField>
-            </Stack>
-
-            {!drilldown ? (
-              <Typography variant="body2" color="text.secondary">Pick a vehicle to see its detail.</Typography>
-            ) : (
-              <>
-                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2 }}>
-                  <Figure label="Total cost" value={huf(drilldown.summary?.total_cost)} color={theme.palette.secondary.main} />
-                  <Figure label="Distance" value={km(drilldown.summary?.distance_km)} color={theme.palette.primary.main} />
-                  <Figure label={`Per 100 ${fmt.distanceShort}`} value={huf(drilldown.summary?.avg_cost_per_100km)} color={theme.palette.warning.main} />
-                  <Figure label="Records" value={String(drilldown.summary?.total_records || 0)} color={theme.palette.success.main} />
-                </Box>
-
-                <Divider sx={{ mb: 2 }} />
-
-                <Box sx={{ width: '100%', height: isMobile ? 200 : 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={drilldown.trend || []} margin={{ left: 4, right: 4 }}>
-                      <CartesianGrid strokeDasharray="4 10" vertical={false} stroke={theme.palette.divider} />
-                      <XAxis dataKey="period" tickFormatter={drilldownTick} axisLine={false} tickLine={false}
-                        interval="preserveStartEnd" minTickGap={16}
-                        tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                      <YAxis tickFormatter={compact} axisLine={false} tickLine={false} width={48}
-                        tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
-                      <Tooltip contentStyle={tooltipStyle} labelFormatter={drilldownTooltipLabel}
-                        formatter={(value, name) => [huf(value), name]} />
-                      <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={9} />
-                      <Bar dataKey="session_cost" name="Driving spend" stackId="cost"
-                        shape={<StackTopBar above={['expense_cost']} />}
-                        fill={theme.palette.primary.main} isAnimationActive={chartAnimation} />
-                      <Bar dataKey="expense_cost" name="Other costs" stackId="cost"
-                        shape={<StackTopBar />}
-                        fill={theme.palette.secondary.main} isAnimationActive={chartAnimation} />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </Box>
-              </>
-            )}
-          </Card>
         </>
       )}
 
@@ -1100,7 +1055,7 @@ const Analytics = () => {
         open={exportOpen}
         onClose={() => setExportOpen(false)}
         onConfirm={handleExportConfirm}
-        vehicles={(data.vehicle_stats || []).map((v) => ({ id: v.id, name: v.name }))}
+        vehicles={fleet.length ? fleet : (data.vehicle_stats || []).map((v) => ({ id: v.id, name: v.name }))}
         archivedVehicles={archivedVehicles}
         availability={{
           categories: (data.expense_categories || []).length > 0,

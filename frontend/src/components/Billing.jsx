@@ -49,6 +49,7 @@ const Billing = () => {
   const status = subscription?.status || 'trialing';
   const meta = STATUS_LABEL[status] || STATUS_LABEL.trialing;
   const daysLeft = subscription?.days_remaining;
+  const exempt = Boolean(subscription?.exempt);
 
   return (
     <Box className="section-shell stagger">
@@ -63,10 +64,16 @@ const Billing = () => {
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
           <Typography variant="h6" fontWeight={700}>Current plan</Typography>
           <Chip size="small" label={meta.label} color={meta.tone} variant="outlined" />
-          {subscription?.plan && subscription.plan !== 'trial' ? (
+          {subscription?.plan && subscription.plan !== 'trial' && !exempt ? (
             <Chip size="small" label={subscription.plan} variant="outlined" />
           ) : null}
         </Stack>
+
+        {exempt ? (
+          <Typography color="text.secondary">
+            Admin account — the plan never expires and is not billed.
+          </Typography>
+        ) : null}
 
         {status === 'trialing' ? (
           <Typography color="text.secondary">
@@ -90,6 +97,8 @@ const Billing = () => {
         ) : null}
       </Card>
 
+      {exempt ? null : (
+      <>
       <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5 }}>Plans</Typography>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         {(plans || []).map((plan) => (
@@ -144,6 +153,8 @@ const Billing = () => {
         Online payment is not connected yet. Plans are activated manually for now — get in touch and we will
         switch your account over.
       </Alert>
+      </>
+      )}
     </Box>
   );
 };

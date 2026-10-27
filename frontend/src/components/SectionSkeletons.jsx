@@ -75,7 +75,10 @@ export function DashboardSkeleton() {
 
       {/* Headline figure card: label, big number, divider, three figures. */}
       <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
-        <Skeleton variant="text" width={130} height={20} />
+        <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Skeleton variant="text" width={130} height={20} />
+          <Skeleton variant="rounded" width={104} height={30} />
+        </Stack>
         <Skeleton variant="text" width={280} height={60} sx={{ mb: 2 }} />
         <Divider sx={{ mb: 2 }} />
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
@@ -83,17 +86,8 @@ export function DashboardSkeleton() {
         </Box>
       </Card>
 
-      {/* Trend chart, same height as the real one. */}
-      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-          <Skeleton variant="text" width={160} height={30} />
-          <Skeleton variant="rounded" width={104} height={30} />
-        </Stack>
-        <Skeleton variant="rounded" sx={{ height: { xs: 220, sm: 300 } }} />
-      </Card>
-
       {/* Recent | Coming up. */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
         {[0, 1].map((card) => (
           <Card key={card} sx={{ p: 3, borderRadius: 4 }}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
@@ -106,17 +100,6 @@ export function DashboardSkeleton() {
           </Card>
         ))}
       </Box>
-
-      {/* Cost by vehicle. */}
-      <Card sx={{ p: 3, borderRadius: 4 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-          <Skeleton variant="text" width={200} height={30} />
-          <Skeleton variant="rounded" width={104} height={30} />
-        </Stack>
-        <Stack spacing={2}>
-          {[0, 1, 2].map((row) => <BarRowSkeleton key={row} />)}
-        </Stack>
-      </Card>
     </Box>
   );
 }
@@ -186,24 +169,24 @@ export function AnalyticsSkeleton() {
         {[0, 1, 2].map((row) => <Skeleton key={row} variant="text" height={38} />)}
       </Card>
 
-      {/* Split | categories. */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
-        <Card sx={{ p: 3, borderRadius: 4 }}>
-          <Skeleton variant="text" width={200} height={30} sx={{ mb: 2 }} />
+      {/* Where the money goes: split bars | categories ring, one card. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Skeleton variant="text" width={200} height={30} sx={{ mb: 2 }} />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
           <Stack spacing={2.5}>
             {[0, 1].map((row) => <BarRowSkeleton key={row} />)}
           </Stack>
-        </Card>
-        <Card sx={{ p: 3, borderRadius: 4 }}>
-          <Skeleton variant="text" width={160} height={30} sx={{ mb: 2 }} />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
-            <Skeleton variant="circular" width={168} height={168} sx={{ flexShrink: 0 }} />
-            <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
-              {[0, 1, 2, 3, 4].map((row) => <Skeleton key={row} variant="text" height={22} />)}
+          <Box>
+            <Skeleton variant="text" width={160} height={22} sx={{ mb: 1 }} />
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+              <Skeleton variant="circular" width={168} height={168} sx={{ flexShrink: 0 }} />
+              <Stack spacing={0.75} sx={{ flex: 1, width: '100%' }}>
+                {[0, 1, 2, 3, 4].map((row) => <Skeleton key={row} variant="text" height={22} />)}
+              </Stack>
             </Stack>
-          </Stack>
-        </Card>
-      </Box>
+          </Box>
+        </Box>
+      </Card>
 
       {/* Providers: two rings side by side. */}
       <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
@@ -222,22 +205,6 @@ export function AnalyticsSkeleton() {
             </Box>
           ))}
         </Box>
-      </Card>
-
-      {/* Single vehicle drilldown. */}
-      <Card sx={{ p: 3, borderRadius: 4 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
-          <Box sx={{ flex: 1 }}>
-            <Skeleton variant="text" width={140} height={30} />
-            <Skeleton variant="text" width="60%" height={20} />
-          </Box>
-          <Skeleton variant="rounded" width={200} height={40} />
-        </Stack>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2 }}>
-          {[0, 1, 2, 3].map((i) => <FigureSkeleton key={i} />)}
-        </Box>
-        <Divider sx={{ mb: 2 }} />
-        <Skeleton variant="rounded" sx={{ height: { xs: 200, sm: 260 } }} />
       </Card>
     </Box>
   );

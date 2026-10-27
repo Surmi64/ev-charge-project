@@ -32,18 +32,22 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
   const { logout, user } = useAuth();
   const theme = useTheme();
 
-  // Primary destinations, deliberately five so the mobile bar can mirror them.
+  // Primary destinations. The mobile bar adds Account as a fifth, because on a phone
+  // that page is also the way into Subscription and Admin.
   const menuItems = [
     { text: 'Dashboard', icon: <DashIcon />, path: '/' },
     { text: 'Records', icon: <ActivityIcon />, path: '/activity' },
     { text: 'Vehicles', icon: <CarIcon />, path: '/vehicles' },
     { text: 'Analytics', icon: <AnalyticsIcon />, path: '/analytics' },
-    { text: 'Account', icon: <PersonIcon />, path: '/account' },
   ];
 
-  // Shared with the Account page, which is where a phone reaches these — the sidebar
-  // is hidden below `sm`.
-  const settingsItems = getSettingsItems(user);
+  // Account sat with the primary destinations while Subscription sat down here, so
+  // settings lived in two places. The shared list stays without it: the Account
+  // page draws that list on mobile and would otherwise link to itself.
+  const settingsItems = [
+    { text: 'Account', icon: <PersonIcon />, path: '/account' },
+    ...getSettingsItems(user),
+  ];
 
   const isMenuItemSelected = (path) => location.pathname === path;
 

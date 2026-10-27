@@ -138,6 +138,28 @@ def _empty_period(month: str) -> dict:
     }
 
 
+# The dashboard headline. A calendar month read zero for the first days of every
+# month, and for good once an account stopped logging, which made the largest
+# number on the page the least informative one.
+ROLLING_WINDOW_DAYS = 30
+
+
+def _fetch_window(cur, user_id: str, db, start: date, end: date) -> dict:
+    """Totals for [start, end), whatever calendar buckets that range straddles."""
+    rows = _fetch_trend_stats(cur, user_id, db=db, bucket='month', start_date=start, end_date=end)
+    window = _empty_period(start.isoformat())
+    window.pop('month')
+    window['start'] = start.isoformat()
+    window['end'] = (end - timedelta(days=1)).isoformat()
+    for row in rows:
+        for key in ('total_energy_kwh', 'session_cost', 'session_count', 'expense_cost',
+                    'expense_count', 'total_distance_km', 'total_cost'):
+            window[key] += row[key]
+    if window['total_distance_km'] > 0:
+        window['avg_cost_per_100km'] = window['total_cost'] / window['total_distance_km'] * 100
+    return window
+
+
 @router.get('/dashboard/stats')
 def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
     # No backfill here: every write path (sessions, expenses, CSV import) already
@@ -206,6 +228,13 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     monthly_stats_by_key = {row['month']: row for row in monthly_stats}
     current_month = monthly_stats_by_key.get(current_month_start.strftime('%Y-%m'), _empty_period(current_month_start.strftime('%Y-%m')))
     previous_month = monthly_stats_by_key.get(previous_month_start.strftime('%Y-%m'), _empty_period(previous_month_start.strftime('%Y-%m')))
+
+    window_end = date.today() + timedelta(days=1)
+    window_start = window_end - timedelta(days=ROLLING_WINDOW_DAYS)
+    last_window = _fetch_window(cur, user_id, db, window_start, window_end)
+    previous_window = _fetch_window(
+        cur, user_id, db, window_start - timedelta(days=ROLLING_WINDOW_DAYS), window_start,
+    )
 
     cur.execute(
         f"""
@@ -371,12 +400,15 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             'title': 'Inactive vehicles',
             'description': f'{inactive_vehicle_count} vehicle has no tracked activity in the last 45 days.',
         })
-    if previous_month['total_cost'] > 0 and current_month['total_cost'] > previous_month['total_cost']:
+    # Compared over equal 30 day windows: a part-month against a whole one fired
+    # late in the month and never early in it. Keyed by month all the same, so a
+    # dismissal holds until the month turns rather than for a single day.
+    if previous_window['total_cost'] > 0 and last_window['total_cost'] > previous_window['total_cost']:
         alerts.append({
             'id': f"cost-increase:{current_month['month']}",
             'level': 'warning',
-            'title': 'Monthly cost increased',
-            'description': 'Current month operating cost is higher than the previous month.',
+            'title': 'Spending is up',
+            'description': 'The last 30 days cost more than the 30 days before them.',
         })
     if not alerts:
         alerts.append({
@@ -400,6 +432,8 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
         'monthly_stats': monthly_stats,
         'current_month': current_month,
         'previous_month': previous_month,
+        'last_30_days': last_window,
+        'previous_30_days': previous_window,
         'cost_composition': {
             'session_cost': current_month['session_cost'],
             'expense_cost': current_month['expense_cost'],

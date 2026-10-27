@@ -432,7 +432,10 @@ def get_security_log(
         '''
         SELECT id, event_type, status, ip_address, details, created_at
         FROM auth_audit_logs
-        WHERE user_id = %s OR LOWER(email) = LOWER(%s)
+        WHERE (user_id = %s OR LOWER(email) = LOWER(%s))
+          -- Token refreshes run every few minutes in an open tab and buried the
+          -- sign-ins and password changes this list exists to show.
+          AND event_type <> 'refresh'
         ORDER BY created_at DESC
         LIMIT %s;
         ''',
@@ -465,7 +468,9 @@ def update_profile(
     ensure_user_roles(db)
     cur = db.cursor()
 
-    if username or email or new_password:
+    # The email is where a reset link goes and the password is the password, so
+    # both need proof of the current one. The display name does not.
+    if email or new_password:
         if not current_password:
             raise HTTPException(status_code=400, detail='Current password required for this change')
         cur.execute('SELECT password_hash FROM users WHERE id = %s;', (user_id,))
