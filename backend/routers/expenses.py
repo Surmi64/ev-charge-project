@@ -265,7 +265,10 @@ def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest,
     if not reminder:
         raise HTTPException(status_code=404, detail='Active recurring expense reminder not found')
 
-    reminder_date = parse_iso_date(payload.date, 'Date') if payload.date else reminder['next_due_date']
+    # Without an explicit date the cost is dated when it was paid: today for a bill paid
+    # ahead of its due date, the due date for one logged after the fact. Dating an early
+    # payment on its due date put it in the future, where no chart counts it as spent.
+    reminder_date = parse_iso_date(payload.date, 'Date') if payload.date else min(date.today(), reminder['next_due_date'])
     reminder_amount = float(payload.amount if payload.amount is not None else reminder['amount'])
     if reminder_amount < 0:
         raise HTTPException(status_code=400, detail='Amount cannot be negative')
@@ -274,7 +277,9 @@ def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest,
         validate_vehicle_reference(db, user_id, reminder['vehicle_id'], allow_archived=False)
 
     description = (payload.description.strip() if payload.description else None) or reminder.get('description')
-    next_due_date = get_next_due_date(reminder_date, reminder['frequency'])
+    # The schedule moves on from the due date, so paying a few days early or late does
+    # not drift every later occurrence with it.
+    next_due_date = get_next_due_date(reminder['next_due_date'], reminder['frequency'])
 
     try:
         cur.execute(
