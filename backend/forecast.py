@@ -16,9 +16,11 @@ naive "average the last few months and repeat it" projection wrong:
    happened in — and the seasonal factor is only re-applied to the months being
    predicted.
 
-3. Ownership costs are lumpy. An annual insurance premium is not a monthly cost, but
-   over a year it behaves like one, so non-fuel spending is amortised rather than
-   predicted to recur on the month it last happened.
+3. Ownership costs are lumpy. Where the account has told us the schedule — an active
+   recurring reminder — the cost lands on its due dates at its own amount, because
+   that is a plan, not a guess. Everything else non-fuel is amortised over the year
+   it was observed in, minus the past entries that were those reminders being paid:
+   counting them in the average as well would charge each premium twice.
 
 Everything here is an estimate and the endpoint says so: the response carries how much
 history it had, and a confidence the client shows rather than hiding.
@@ -26,6 +28,15 @@ history it had, and a confidence the client shows rather than hiding.
 
 from calendar import monthrange
 from datetime import date, timedelta
+
+# How many months each reminder frequency steps by. Mirrors RECURRING_FREQUENCIES in
+# routers/expenses.py, which is not imported to keep this module free of FastAPI.
+REMINDER_STEP_MONTHS = {'monthly': 1, 'quarterly': 3, 'yearly': 12}
+
+# How close a past expense's amount must be to a reminder's for it to count as that
+# reminder having been paid. Logging a reminder copies its amount, but the dialog lets
+# the figure be corrected, and premiums drift a little at renewal.
+REMINDER_AMOUNT_TOLERANCE = 0.1
 
 try:
     from backend.climate import curve_for, resolve_zone
@@ -160,18 +171,79 @@ def _fetch_history(db, user_id: str, since: date):
 
     cur.execute(
         """
-        SELECT COALESCE(SUM(ve.total_cost), 0) AS total, COUNT(*) AS count
+        SELECT ve.vehicle_id, ve.expense_category, ve.event_type, ve.total_cost, ve.occurred_at
         FROM vehicle_events ve
         LEFT JOIN vehicles v ON v.id = ve.vehicle_id AND v.user_id = ve.user_id
         WHERE ve.user_id = %s
           AND COALESCE(v.is_archived, FALSE) = FALSE
           AND ve.event_type NOT IN ('charging', 'fueling')
-          AND ve.occurred_at >= %s;
+          AND ve.occurred_at >= %s
+        ORDER BY ve.occurred_at;
         """,
         (user_id, since.isoformat()),
     )
-    expenses = cur.fetchone() or {'total': 0, 'count': 0}
+    expenses = cur.fetchall()
     return sessions, expenses
+
+
+def _fetch_reminders(db, user_id: str):
+    """Active recurring reminders on live vehicles, or on no vehicle at all."""
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT r.id, r.vehicle_id, r.category, r.amount, r.frequency, r.next_due_date, r.description
+        FROM recurring_expense_reminders r
+        LEFT JOIN vehicles v ON v.id = r.vehicle_id AND v.user_id = r.user_id
+        WHERE r.user_id = %s
+          AND r.is_active = TRUE
+          AND COALESCE(v.is_archived, FALSE) = FALSE;
+        """,
+        (user_id,),
+    )
+    return cur.fetchall()
+
+
+def _add_months(value: date, months: int) -> date:
+    index = value.month - 1 + months
+    year = value.year + index // 12
+    month = index % 12 + 1
+    return date(year, month, min(value.day, monthrange(year, month)[1]))
+
+
+def _reminder_occurrences(reminder: dict, start: date, end: date) -> list[date]:
+    """Due dates of one reminder that fall within [start, end].
+
+    Stepped from the stored due date rather than from `start`, so the day of the month
+    is the reminder's own. A due date already behind us is overdue, not upcoming: the
+    dashboard flags it, and the projection only counts the dates still ahead.
+    """
+    step = REMINDER_STEP_MONTHS.get(reminder.get('frequency'))
+    due = reminder.get('next_due_date')
+    if not step or not due:
+        return []
+    count = 0
+    while _add_months(due, step * count) < start:
+        count += 1
+    dates = []
+    while (current := _add_months(due, step * count)) <= end:
+        dates.append(current)
+        count += 1
+    return dates
+
+
+def _is_reminder_payment(expense: dict, reminders: list[dict]) -> bool:
+    """Whether a past expense looks like one of the reminders having been paid."""
+    category = expense.get('expense_category') or expense.get('event_type')
+    amount = float(expense.get('total_cost') or 0)
+    for reminder in reminders:
+        if reminder['category'] != category:
+            continue
+        if reminder.get('vehicle_id') is not None and reminder['vehicle_id'] != expense.get('vehicle_id'):
+            continue
+        expected = float(reminder['amount'] or 0)
+        if abs(amount - expected) <= expected * REMINDER_AMOUNT_TOLERANCE:
+            return True
+    return False
 
 
 def _per_vehicle_baselines(sessions, own_curve=None, zone=None, monthly_distance=None):
@@ -310,7 +382,8 @@ def build_forecast(db, user_id: str, today: date | None = None) -> dict:
     stored_zone = _fetch_climate_zone(db, user_id)
     zone = resolve_zone(stored_zone)
 
-    sessions, expense_row = _fetch_history(db, user_id, since)
+    sessions, expenses = _fetch_history(db, user_id, since)
+    reminders = _fetch_reminders(db, user_id)
     # Derived before the baselines, because the baselines are de-seasonalised with the
     # very curve the projection will re-apply.
     own_curve, observed_months, monthly_distance = _seasonal_profile(sessions)
@@ -333,9 +406,46 @@ def build_forecast(db, user_id: str, today: date | None = None) -> dict:
             },
         }
 
-    # Non-fuel spending amortised over the window it was observed in.
-    window_days = max(history_days, 1)
-    expense_per_day = float(expense_row.get('total') or 0) / window_days
+    # A cost recorded with a date still ahead -- a bill paid early, logged on its due
+    # date -- is already known, so it goes into its own month rather than the average.
+    # Logging a reminder also moves the reminder past that date, so without this the
+    # cost would appear in neither the actuals nor the forecast.
+    upcoming = [e for e in expenses if e['occurred_at'].date() > today]
+    expenses = [e for e in expenses if e['occurred_at'].date() <= today]
+
+    # Unscheduled non-fuel spending, amortised over the window it was observed in.
+    # The window runs to today from the first record of either kind: dividing by the
+    # span between charging sessions, as this used to, shrank the divisor whenever an
+    # account stopped logging and inflated the average with it.
+    unscheduled = [e for e in expenses if not _is_reminder_payment(e, reminders)]
+    first_seen = min(
+        [row['occurred_at'].date() for row in (sessions[:1] + expenses[:1])] or [today]
+    )
+    window_days = max((today - first_seen).days, 1)
+    expense_per_day = sum(float(e.get('total_cost') or 0) for e in unscheduled) / window_days
+
+    # Forecast starts tomorrow, matching the partial current month below.
+    scheduled_by_month: dict[tuple[int, int], list[dict]] = {}
+    for reminder in reminders:
+        for due in _reminder_occurrences(reminder, today + timedelta(days=1), year_end):
+            scheduled_by_month.setdefault((due.year, due.month), []).append({
+                'reminder_id': reminder['id'],
+                'due_date': due.isoformat(),
+                'category': reminder['category'],
+                'description': reminder.get('description'),
+                'amount': round(float(reminder['amount'] or 0), 2),
+            })
+    for expense in upcoming:
+        due = expense['occurred_at'].date()
+        if due > year_end:
+            continue
+        scheduled_by_month.setdefault((due.year, due.month), []).append({
+            'reminder_id': None,
+            'due_date': due.isoformat(),
+            'category': expense.get('expense_category') or expense.get('event_type'),
+            'description': None,
+            'amount': round(float(expense.get('total_cost') or 0), 2),
+        })
 
     months = []
     for month_start in _months_between(today, year_end):
@@ -361,7 +471,10 @@ def build_forecast(db, user_id: str, today: date | None = None) -> dict:
             distance_km += vehicle_distance
             session_cost += vehicle_distance * baseline['cost_per_km'] * factor
 
-        expense_cost = expense_per_day * days
+        scheduled = scheduled_by_month.get((month_start.year, month_start.month), [])
+        scheduled_cost = sum(item['amount'] for item in scheduled)
+        unscheduled_cost = expense_per_day * days
+        expense_cost = scheduled_cost + unscheduled_cost
         months.append({
             'period': month_start.isoformat(),
             'partial': partial,
@@ -369,6 +482,11 @@ def build_forecast(db, user_id: str, today: date | None = None) -> dict:
             'distance_km': round(distance_km, 1),
             'session_cost': round(session_cost, 2),
             'expense_cost': round(expense_cost, 2),
+            # The two halves of expense_cost: what a reminder says is due, and the
+            # average of everything else.
+            'scheduled_expense_cost': round(scheduled_cost, 2),
+            'unscheduled_expense_cost': round(unscheduled_cost, 2),
+            'scheduled': scheduled,
             'total_cost': round(session_cost + expense_cost, 2),
         })
 
@@ -402,6 +520,9 @@ def build_forecast(db, user_id: str, today: date | None = None) -> dict:
             # a fact. A Melbourne account left on the default gets its year backwards.
             'climate_answered': bool(stored_zone),
             'confidence': confidence,
+            # Unscheduled only; scheduled costs are per month in `months`.
             'expense_per_month': round(expense_per_day * 30, 2),
+            'reminders': len(reminders),
+            'expense_window_days': window_days,
         },
     }

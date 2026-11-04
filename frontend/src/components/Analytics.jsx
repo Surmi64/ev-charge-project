@@ -594,6 +594,11 @@ const Analytics = () => {
                   {forecast.basis.confidence === 'high' ? '' : ` (${forecast.basis.confidence} confidence)`}.
                   Seasonal consumption is modelled, so the winter months are higher: a battery car spends
                   stored energy on cabin heat and warming the pack, where an engine reuses its own waste heat.
+                  {' '}Other costs are your recurring costs on their due dates
+                  {forecast.basis.expense_per_month > 0
+                    ? `, plus ${huf(forecast.basis.expense_per_month)} a month — the average of everything else you logged in the last year`
+                    : ''}
+                  . Add a cost under Records → Recurring and it lands on its own month instead of in the average.
                 </Typography>
               </Alert>
             ) : null}
