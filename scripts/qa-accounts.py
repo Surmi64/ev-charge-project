@@ -73,8 +73,22 @@ def register(name):
     if status != 201:
         print(f'Could not register {email}: {status} {body}')
         sys.exit(1)
-    _, session = call('POST', '/auth/login', {'email': email, 'password': PASSWORD})
-    return email, session
+    return email, sign_in(email)
+
+
+def sign_in(email):
+    """Log in, keeping the refresh token the server sets as a cookie beside the body."""
+    request = urllib.request.Request(
+        API + '/auth/login', data=json.dumps({'email': email, 'password': PASSWORD}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST',
+    )
+    with urllib.request.urlopen(request) as response:
+        session = json.loads(response.read())
+        for line in response.headers.get_all('set-cookie') or []:
+            name, _, rest = line.partition('=')
+            if name.strip() == 'mileage_refresh':
+                session['refresh_token'] = rest.partition(';')[0]
+    return session
 
 
 def main():

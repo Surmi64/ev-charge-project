@@ -23,12 +23,32 @@ class Token(BaseModel):
     user: dict
 
 
+# Both read the httpOnly cookie first; the body field is for non-browser clients and
+# for sessions that predate the cookie.
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
+
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str = Field(..., max_length=2000)
+    code: str = Field(..., max_length=32)
+
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(..., max_length=32)
+
+
+class PasswordConfirmRequest(BaseModel):
+    password: str = Field(..., max_length=200)
+
+
+class MfaDisableRequest(BaseModel):
+    password: str = Field(..., max_length=200)
+    code: str = Field(..., max_length=32)
 
 
 class ForgotPasswordRequest(BaseModel):

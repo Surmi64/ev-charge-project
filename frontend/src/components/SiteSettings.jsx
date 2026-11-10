@@ -158,6 +158,28 @@ const SiteSettings = () => {
           }
           sx={{ alignItems: 'flex-start', ml: 0, mt: 2, gap: 1.5 }}
         />
+        <FormControlLabel
+          control={
+            <Switch
+              checked={Boolean(draft.require_admin_mfa)}
+              onChange={(event) => setValue('require_admin_mfa')(event.target.checked)}
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2" fontWeight={600}>
+                Require two-step sign-in for admins
+                {inherited('require_admin_mfa') ? <Chip size="small" label="default" variant="outlined" sx={{ ml: 1, height: 19 }} /> : null}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {draft.require_admin_mfa
+                  ? 'Admins without an authenticator app are kept out of these pages, and cannot switch theirs off.'
+                  : 'Turn on once your own two-step sign-in is set up in Account › Security; saving is refused before that.'}
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: 'flex-start', ml: 0, mt: 2, gap: 1.5 }}
+        />
       </Paper>
 
       <Paper sx={{ p: 2.5, borderRadius: 4 }}>

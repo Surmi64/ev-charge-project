@@ -71,6 +71,13 @@ SETTING_DEFINITIONS = {
         'env_default': lambda: False,
         'label': 'Require a confirmed email before recording',
     },
+    # Off by default so turning it on is a deliberate act; the admin page refuses it
+    # until the admin saving it has two-step sign-in on, so nobody locks themselves out.
+    'require_admin_mfa': {
+        'coerce': _bool,
+        'env_default': lambda: False,
+        'label': 'Require two-step sign-in for admins',
+    },
     'maintenance_notice': {
         'coerce': _notice,
         'env_default': lambda: '',

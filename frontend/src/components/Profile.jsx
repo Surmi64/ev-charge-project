@@ -9,6 +9,7 @@ import CostPerKmSettings from './CostPerKmSettings';
 import NotificationSettings from './NotificationSettings';
 import AccountDataSettings from './AccountDataSettings';
 import SessionsCard from './SessionsCard';
+import TwoStepCard from './TwoStepCard';
 import AppearanceSettings from './AppearanceSettings';
 import PasswordField from './PasswordField';
 import { toast } from 'sonner';
@@ -266,6 +267,7 @@ const Profile = () => {
     const tab = TAB_VALUES.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'profile';
     const [securityLoading, setSecurityLoading] = useState(true);
     const [securityLog, setSecurityLog] = useState([]);
+    const [sessionsVersion, setSessionsVersion] = useState(0);
 
     const setTab = (next) => {
         const params = new URLSearchParams(searchParams);
@@ -376,7 +378,9 @@ const Profile = () => {
 
                     {tab === 'security' ? (
                         <Stack spacing={3}>
-                            <SessionsCard />
+                            {/* Turning two-step sign-in on signs the other devices out. */}
+                            <TwoStepCard onSessionsChanged={() => setSessionsVersion((value) => value + 1)} />
+                            <SessionsCard key={sessionsVersion} />
                             <SecurityLog entries={securityLog} loading={securityLoading} />
                         </Stack>
                     ) : null}

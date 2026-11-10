@@ -7,13 +7,27 @@
 //      the same token means the second one gets 401 and logs the user out, so refresh
 //      is single-flighted here and every caller awaits the same in-flight promise.
 
-const TOKEN_KEY = 'token';
-const REFRESH_KEY = 'refreshToken';
+// The access token lives in this module's memory only, and the refresh token in an
+// httpOnly cookie the server sets — page scripts never see it, so an XSS bug cannot
+// carry a 30 day session away. A reload therefore starts with no access token and
+// gets one from the cookie (AuthContext's restore).
+//
+// Before the cookie, both tokens sat in localStorage. LEGACY_* are read once so that
+// people signed in then are not thrown out: the old refresh token is traded for a
+// cookie on the first refresh and both keys are removed.
+const LEGACY_TOKEN_KEY = 'token';
+const LEGACY_REFRESH_KEY = 'refreshToken';
+// Not a secret: only whether this browser was signed in, so a visitor who never was
+// does not send a refresh that can only fail on every page load.
+const SIGNED_IN_KEY = 'signedIn';
 // The fleet whose records this tab works on: the owner's account id, or nothing for
 // the person's own account. Sent on every request; the server checks membership each
 // time, so a stale value costs one refused request, never someone else's data.
 const WORKSPACE_KEY = 'workspace';
 const WORKSPACE_HEADER = 'X-Mileage-Workspace';
+// Every tab of the browser shares the one refresh cookie, and the server rotates it on
+// each use; the lock makes tabs take turns so each presents the cookie the last left.
+const REFRESH_LOCK = 'mileage-auth-refresh';
 
 const readStorage = (key) => {
   try {
@@ -23,28 +37,41 @@ const readStorage = (key) => {
   }
 };
 
-export const getWorkspace = () => readStorage(WORKSPACE_KEY);
-
-export const setWorkspace = (ownerId) => {
+const writeStorage = (key, value) => {
   try {
-    if (ownerId === null || ownerId === undefined) localStorage.removeItem(WORKSPACE_KEY);
-    else localStorage.setItem(WORKSPACE_KEY, String(ownerId));
+    if (value === null || value === undefined) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
   } catch {
-    // Storage blocked: the switch lasts until the page reloads, which is acceptable.
+    // Storage blocked (private mode, site data off): the session still works for this
+    // page; it just is not remembered as signed in across a reload.
   }
 };
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const getRefreshToken = () => localStorage.getItem(REFRESH_KEY);
+export const getWorkspace = () => readStorage(WORKSPACE_KEY);
 
-export const persistSession = (accessToken, refreshToken) => {
-  localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem(REFRESH_KEY, refreshToken);
+export const setWorkspace = (ownerId) => {
+  writeStorage(WORKSPACE_KEY, ownerId === null || ownerId === undefined ? null : String(ownerId));
+};
+
+let accessToken = null;
+
+export const getToken = () => accessToken;
+
+/** Whether a reload should try to restore a session from the cookie. */
+export const mayHaveSession = () => Boolean(readStorage(SIGNED_IN_KEY) || readStorage(LEGACY_REFRESH_KEY));
+
+export const persistSession = (nextAccessToken) => {
+  accessToken = nextAccessToken;
+  writeStorage(SIGNED_IN_KEY, '1');
+  writeStorage(LEGACY_TOKEN_KEY, null);
+  writeStorage(LEGACY_REFRESH_KEY, null);
 };
 
 export const clearStoredSession = () => {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+  accessToken = null;
+  writeStorage(SIGNED_IN_KEY, null);
+  writeStorage(LEGACY_TOKEN_KEY, null);
+  writeStorage(LEGACY_REFRESH_KEY, null);
   setWorkspace(null);
 };
 
@@ -71,39 +98,56 @@ export const onWorkspaceInvalid = (handler) => {
 
 let inFlightRefresh = null;
 
+const requestRefresh = async () => {
+  const legacy = readStorage(LEGACY_REFRESH_KEY);
+  const res = await fetch('/api/auth/refresh', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(legacy ? { refresh_token: legacy } : {}),
+  });
+  if (!res.ok) return null;
+  return res.json();
+};
+
 export const refreshAccessToken = async () => {
   if (inFlightRefresh) return inFlightRefresh;
 
   inFlightRefresh = (async () => {
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) {
+    // Older browsers without Web Locks refresh unserialised; the server honours the
+    // token a rotation just replaced for a short while, which covers two tabs racing.
+    const data = navigator.locks?.request
+      ? await navigator.locks.request(REFRESH_LOCK, requestRefresh)
+      : await requestRefresh();
+
+    if (!data) {
       clearStoredSession();
       sessionExpiredHandler?.();
       return null;
     }
 
-    const res = await fetch('/api/auth/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    if (!res.ok) {
-      clearStoredSession();
-      sessionExpiredHandler?.();
-      return null;
-    }
-
-    const data = await res.json();
-    persistSession(data.access_token, data.refresh_token);
+    persistSession(data.access_token);
     return data;
   })();
 
   try {
     return await inFlightRefresh;
+  } catch {
+    // Network failure: the session may well be fine, so nothing is cleared.
+    return null;
   } finally {
     inFlightRefresh = null;
   }
+};
+
+/** Revoke this browser's session on the server and forget it here. */
+export const endSession = async () => {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {
+    // Best effort; the local session is cleared either way.
+  }
+  clearStoredSession();
 };
 
 /**

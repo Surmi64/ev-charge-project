@@ -28,6 +28,7 @@ import Vehicles from './components/Vehicles';
 import Analytics from './components/Analytics';
 import Profile from './components/Profile';
 import Activity from './components/Activity';
+import { apiFetch } from './utils/api';
 import AdminPage from './components/AdminPage';
 import PasswordRecoveryPage from './components/PasswordRecoveryPage';
 import Billing from './components/Billing';
@@ -419,14 +420,7 @@ function App() {
     const newMode = themeMode === 'dark' ? 'light' : 'dark';
     setThemeMode(newMode);
     if (token) {
-      await fetch('/api/auth/me', {
-        method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ theme_mode: newMode })
-      });
+      await apiFetch('/api/auth/me', { method: 'PATCH', body: JSON.stringify({ theme_mode: newMode }) });
       updateUser({ theme_mode: newMode });
     }
   };

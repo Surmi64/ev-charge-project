@@ -10,6 +10,7 @@ try:
     from backend.billing import serialize_subscription, start_paid_period
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, PLAN_PRICES, TRIAL_DAYS
     from backend.site_settings import SETTING_DEFINITIONS, get_site_settings, save_site_settings
+    from backend.account_lifecycle import notify
 except ModuleNotFoundError:
     from auth_utils import create_refresh_token, hash_token
     from config import IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
@@ -20,6 +21,7 @@ except ModuleNotFoundError:
     from billing import serialize_subscription, start_paid_period
     from config import BOOTSTRAP_ADMIN_EMAIL, PLAN_PRICES, TRIAL_DAYS
     from site_settings import SETTING_DEFINITIONS, get_site_settings, save_site_settings
+    from account_lifecycle import notify
 
 router = APIRouter(prefix='/admin', tags=['admin'])
 
@@ -29,12 +31,20 @@ ALLOWED_USER_ROLES = {'admin', 'user'}
 def require_admin_user(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
     ensure_user_roles(db)
     cur = db.cursor()
-    cur.execute('SELECT id, username, email, role FROM users WHERE id = %s LIMIT 1;', (user_id,))
+    mfa_column = ', totp_enabled_at IS NOT NULL AS mfa_enabled' if column_exists(db, 'users', 'totp_enabled_at') else ', FALSE AS mfa_enabled'
+    cur.execute(f'SELECT id, username, email, role{mfa_column} FROM users WHERE id = %s LIMIT 1;', (user_id,))
     user = cur.fetchone()
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
     if user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail='Admin access required')
+    # The flag tells the client this is fixable from Account › Security, not a lost role.
+    if not user['mfa_enabled'] and get_site_settings(db).get('require_admin_mfa'):
+        raise HTTPException(
+            status_code=403,
+            detail='Turn on two-step sign-in in Account › Security to use the admin pages.',
+            headers={'X-Mileage-Mfa-Required': '1'},
+        )
 
     # Admin endpoints never call get_tenant_db, so `app.user_id` stays unset and the
     # row level security policies on vehicles / charging_sessions / expenses /
@@ -135,7 +145,7 @@ def list_users(admin_user=Depends(require_admin_user), db=Depends(get_db)):
     if column_exists(db, 'users', 'last_login_at'):
         cur.execute(
             '''
-            SELECT id, username, email, role, created_at, last_login_at
+            SELECT id, username, email, role, created_at, last_login_at, totp_enabled_at IS NOT NULL AS mfa_enabled
             FROM users
             ORDER BY created_at ASC;
             '''
@@ -343,6 +353,37 @@ def revoke_user_sessions(
     db.commit()
     return {'message': 'User sessions revoked successfully', 'revoked_sessions': revoked_count}
 
+@router.post('/users/{target_user_id}/reset-mfa')
+def reset_user_mfa(target_user_id: int, request: Request, admin_user=Depends(require_admin_user), db=Depends(get_db)):
+    """Switch two-step sign-in off for someone who lost both the phone and the codes.
+
+    Only after confirming who they are some other way. Every session is signed out and
+    the account is told by mail, so a reset nobody asked for does not go unnoticed.
+    """
+    cur = db.cursor()
+    cur.execute('SELECT id, email FROM users WHERE id = %s;', (target_user_id,))
+    target = cur.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail='Target user not found')
+    cur.execute(
+        'UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled_at = NULL, totp_last_step = NULL WHERE id = %s;',
+        (target_user_id,),
+    )
+    cur.execute('DELETE FROM mfa_recovery_codes WHERE user_id = %s;', (target_user_id,))
+    cur.execute('UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL;', (target_user_id,))
+    notify(cur, target_user_id, target['email'], 'Two-step sign-in was reset on your Mileage account', [
+        'An administrator switched two-step sign-in off for your account, and every device was signed out.',
+        'Sign in with your password and turn it on again from Account › Security.',
+        'If you did not ask for this, reply to this message straight away.',
+    ])
+    log_auth_event(
+        db, 'admin_reset_mfa', 'success', user_id=admin_user['id'], email=admin_user['email'],
+        ip_address=get_client_ip(request), details={'target_user_id': target_user_id, 'target_email': target['email']},
+    )
+    db.commit()
+    return {'message': 'Two-step sign-in reset'}
+
+
 @router.get('/site-settings')
 def read_site_settings(admin=Depends(require_admin_user), db=Depends(get_db)):
     return {
@@ -358,6 +399,8 @@ def update_site_settings(payload: dict, request: Request, admin=Depends(require_
     updates = payload.get('settings') if isinstance(payload.get('settings'), dict) else payload
     if not isinstance(updates, dict) or not updates:
         raise HTTPException(status_code=400, detail='No settings supplied')
+    if updates.get('require_admin_mfa') is True and not admin['mfa_enabled']:
+        raise HTTPException(status_code=400, detail='Turn on two-step sign-in for your own account first, or you would lock yourself out.')
 
     try:
         settings = save_site_settings(db, updates, admin_user_id=admin['id'])

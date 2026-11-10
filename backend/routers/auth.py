@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import EmailStr
 import psycopg2
@@ -24,12 +24,14 @@ try:
     )
     from backend.climate import ZONES as CLIMATE_ZONES, zone_options
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from backend.config import REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_COOKIE_SECURE, REFRESH_GRACE_SECONDS, REFRESH_TOKEN_EXPIRE_DAYS
+    from backend import mfa
     from backend.db import column_exists, get_db, table_exists
     from backend.site_settings import get_site_settings
     from backend.billing import get_own_db
     from backend.schemas import (
-        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
-        UserLogin, UserRegister, VerifyEmailRequest,
+        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, MfaCodeRequest, MfaDisableRequest, MfaLoginRequest,
+        PasswordConfirmRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister, VerifyEmailRequest,
     )
 except ModuleNotFoundError:
     from account_lifecycle import DELETION_GRACE_DAYS, TERMS_VERSION, notify, send_password_reset, start_email_verification
@@ -37,12 +39,14 @@ except ModuleNotFoundError:
     from climate import ZONES as CLIMATE_ZONES, zone_options
     from auth_utils import create_access_token, create_refresh_token, get_current_session_id, get_current_user_id, hash_token, pwd_context, validate_password_strength
     from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+    from config import REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_COOKIE_SECURE, REFRESH_GRACE_SECONDS, REFRESH_TOKEN_EXPIRE_DAYS
+    import mfa
     from db import column_exists, get_db, table_exists
     from site_settings import get_site_settings
     from billing import get_own_db
     from schemas import (
-        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
-        UserLogin, UserRegister, VerifyEmailRequest,
+        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, MfaCodeRequest, MfaDisableRequest, MfaLoginRequest,
+        PasswordConfirmRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister, VerifyEmailRequest,
     )
 
 router = APIRouter(tags=['auth'])
@@ -159,22 +163,58 @@ def load_user_profile(db, user_id) -> dict | None:
     # for the first only when verification is on, and for the second whenever it is set.
     for stamp in ('email_verified_at', 'deletion_scheduled_for'):
         user[stamp] = user[stamp].isoformat() if user.get(stamp) else None
+    # Whether two-step sign-in is on — never the secret itself.
+    user['mfa_enabled'] = False
+    if column_exists(db, 'users', 'totp_enabled_at'):
+        cur.execute('SELECT totp_enabled_at IS NOT NULL AS on FROM users WHERE id = %s;', (user_id,))
+        user['mfa_enabled'] = bool(cur.fetchone()['on'])
     return user
 
 
-def build_auth_payload(db, user_id, access_token: str, refresh_token: str):
+def build_auth_payload(db, user_id, access_token: str):
+    """What a sign-in or refresh answers. The refresh token is not in it: it goes out
+    as the cookie set beside this body, and page scripts never see it."""
     profile = load_user_profile(db, user_id)
     if not profile:
         raise HTTPException(status_code=404, detail='User not found')
     return {
         'access_token': access_token,
-        'refresh_token': refresh_token,
         'token_type': 'bearer',
         'user': profile,
     }
 
 
-def create_session_tokens(db, db_user: dict, request: Request | None = None):
+def set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    # SameSite=Strict: the cookie never rides along on a request another site starts,
+    # which is what makes a cookie-authenticated refresh safe from CSRF. The path keeps
+    # it off every request but the few auth endpoints that read it.
+    response.set_cookie(
+        REFRESH_COOKIE_NAME, refresh_token,
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path=REFRESH_COOKIE_PATH,
+        secure=REFRESH_COOKIE_SECURE,
+        httponly=True,
+        samesite='strict',
+    )
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, secure=REFRESH_COOKIE_SECURE, httponly=True, samesite='strict',
+    )
+
+
+def presented_refresh_token(request: Request, payload) -> str | None:
+    """The cookie, or a token in the body.
+
+    The body is still read for clients that are not browsers (the QA scripts) and for
+    one release of browsers that signed in before the cookie existed and hold the
+    token in localStorage — their first refresh trades it for the cookie.
+    """
+    return request.cookies.get(REFRESH_COOKIE_NAME) or (getattr(payload, 'refresh_token', None) if payload else None)
+
+
+def create_session_tokens(db, db_user: dict, request: Request | None = None, response: Response | None = None):
     refresh_token, refresh_expires_at = create_refresh_token()
     refresh_hash = hash_token(refresh_token)
 
@@ -203,7 +243,9 @@ def create_session_tokens(db, db_user: dict, request: Request | None = None):
     session_id = cur.fetchone()['id']
     db.commit()
     access_token = create_access_token(data={'sub': str(db_user['id']), 'sid': session_id})
-    return build_auth_payload(db, db_user['id'], access_token, refresh_token)
+    if response is not None:
+        set_refresh_cookie(response, refresh_token)
+    return build_auth_payload(db, db_user['id'], access_token)
 
 
 def is_session_expired(expires_at):
@@ -283,7 +325,7 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
 
 
 @router.post('/auth/login')
-def login(user: UserLogin, request: Request, db=Depends(get_db)):
+def login(user: UserLogin, request: Request, response: Response, db=Depends(get_db)):
     check_login_rate_limit(db, user.email, get_client_ip(request))
     ensure_user_roles(db)
     cur = db.cursor()
@@ -298,80 +340,147 @@ def login(user: UserLogin, request: Request, db=Depends(get_db)):
 
     clear_login_failures(db, user.email)
 
+    # With two-step sign-in on, a right password earns only a five-minute challenge;
+    # the session is opened by /auth/login/mfa once the code checks out.
+    if db_user.get('totp_enabled_at') is not None:
+        log_auth_event(db, 'login', 'challenge', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request))
+        db.commit()
+        return {'mfa_required': True, 'mfa_token': mfa.create_challenge(db_user['id'])}
+
+    return _complete_login(db, db_user, request, response, method='password')
+
+
+def _complete_login(db, db_user: dict, request: Request, response: Response, method: str):
+    cur = db.cursor()
     if column_exists(db, 'users', 'last_login_at'):
         cur.execute('UPDATE users SET last_login_at = NOW() WHERE id = %s;', (db_user['id'],))
         db.commit()
 
-    payload = create_session_tokens(db, db_user, request)
-    log_auth_event(db, 'login', 'success', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request))
+    payload = create_session_tokens(db, db_user, request, response)
+    log_auth_event(db, 'login', 'success', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request),
+                   details={'method': method})
     db.commit()
     return payload
 
 
+@router.post('/auth/login/mfa')
+def login_second_step(payload: MfaLoginRequest, request: Request, response: Response, db=Depends(get_db)):
+    user_id = mfa.read_challenge(payload.mfa_token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail='The sign-in took too long. Enter your password again.')
+    # Per account, not per challenge: a fresh password step must not reset the count.
+    # Five tries in a quarter hour leaves a guesser about one chance in 70 000 a day.
+    too_many = 'Too many wrong codes. Wait a few minutes and try again.'
+    enforce(db, f'mfa:user:{user_id}', 5, 900, too_many)
+    cur = db.cursor()
+    cur.execute('SELECT * FROM users WHERE id = %s;', (user_id,))
+    db_user = cur.fetchone()
+    if not db_user or db_user.get('totp_enabled_at') is None:
+        raise HTTPException(status_code=401, detail='The sign-in took too long. Enter your password again.')
+
+    method = mfa.check_second_factor(cur, db_user, payload.code)
+    if not method:
+        log_auth_event(db, 'login', 'failed', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request),
+                       details={'reason': 'invalid_mfa_code'})
+        db.commit()
+        raise HTTPException(status_code=401, detail='That code is not right. Check the time on your phone, or use a recovery code.')
+
+    cur.execute('DELETE FROM rate_limit_events WHERE key = %s;', (f'mfa:user:{user_id}',))
+    if method == 'recovery':
+        left = mfa.remaining_recovery_codes(cur, db_user['id'])
+        notify(cur, db_user['id'], db_user['email'], 'A Mileage recovery code was used', [
+            f'Someone signed in to your account with one of your recovery codes. {left} unused code{"" if left == 1 else "s"} left.',
+            'If this was not you, change your password and create new recovery codes from Account › Security.',
+        ])
+    db.commit()
+    return _complete_login(db, db_user, request, response, method=method)
+
+
 @router.post('/auth/refresh')
-def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(get_db)):
+def refresh_session(request: Request, response: Response, payload: RefreshTokenRequest | None = None, db=Depends(get_db)):
     ensure_user_roles(db)
     cur = db.cursor()
-    refresh_hash = hash_token(payload.refresh_token)
+    presented = presented_refresh_token(request, payload)
+
+    def refuse(reason: str, detail: str, session=None):
+        log_auth_event(db, 'refresh', 'failed', user_id=session['user_id'] if session else None,
+                       email=session['email'] if session else None, ip_address=get_client_ip(request), details={'reason': reason})
+        db.commit()
+        # Returned, not raised: an HTTPException would drop a cookie deletion, and the
+        # browser would keep offering a dead token on every page load.
+        failure = JSONResponse(status_code=401, content={'detail': detail})
+        clear_refresh_cookie(failure)
+        return failure
+
+    if not presented:
+        # Not logged: a signed-out visitor's page load is not a security event.
+        return JSONResponse(status_code=401, content={'detail': 'Not signed in'})
+
+    refresh_hash = hash_token(presented)
+    # Every tab shares the cookie, so the token a rotation just replaced is honoured
+    # for a moment (see config.REFRESH_GRACE_SECONDS). FOR UPDATE queues two refreshes
+    # of the same session; the second then finds its token as the previous one.
     cur.execute(
         """
-        SELECT s.id, s.user_id, s.expires_at, s.revoked_at, u.username, u.email, u.role
+        SELECT s.id, s.user_id, s.expires_at, s.revoked_at, s.token_hash, u.username, u.email, u.role
         FROM user_sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = %s
-        LIMIT 1;
+           OR (s.previous_token_hash = %s AND s.rotated_at > NOW() - make_interval(secs => %s))
+        LIMIT 1
+        FOR UPDATE OF s;
         """,
-        (refresh_hash,),
+        (refresh_hash, refresh_hash, REFRESH_GRACE_SECONDS),
     )
     session = cur.fetchone()
 
     if not session:
-        log_auth_event(db, 'refresh', 'failed', ip_address=get_client_ip(request), details={'reason': 'invalid_token'})
-        db.commit()
-        raise HTTPException(status_code=401, detail='Invalid refresh token')
-
+        return refuse('invalid_token', 'Invalid refresh token')
     if session.get('revoked_at') is not None:
-        log_auth_event(db, 'refresh', 'failed', user_id=session['user_id'], email=session['email'], ip_address=get_client_ip(request), details={'reason': 'revoked_token'})
-        db.commit()
-        raise HTTPException(status_code=401, detail='Refresh token has been revoked')
-
-    expires_at = session.get('expires_at')
-    if is_session_expired(expires_at):
+        return refuse('revoked_token', 'Refresh token has been revoked', session)
+    if is_session_expired(session.get('expires_at')):
         cur.execute('UPDATE user_sessions SET revoked_at = NOW() WHERE id = %s;', (session['id'],))
-        log_auth_event(db, 'refresh', 'failed', user_id=session['user_id'], email=session['email'], ip_address=get_client_ip(request), details={'reason': 'expired_token'})
-        db.commit()
-        raise HTTPException(status_code=401, detail='Refresh token has expired')
+        return refuse('expired_token', 'Refresh token has expired', session)
 
     new_refresh_token, refresh_expires_at = create_refresh_token()
     access_token = create_access_token(data={'sub': str(session['user_id']), 'sid': session['id']})
+    # The token being replaced becomes the previous one — whichever of the two was
+    # presented — so a browser left holding either still has a valid cookie.
     cur.execute(
         """
         UPDATE user_sessions
-        SET token_hash = %s, expires_at = %s, last_used_at = NOW(), revoked_at = NULL
+        SET previous_token_hash = token_hash, token_hash = %s, rotated_at = NOW(),
+            expires_at = %s, last_used_at = NOW()
         WHERE id = %s;
         """,
         (hash_token(new_refresh_token), refresh_expires_at, session['id']),
     )
-    db.commit()
-
     log_auth_event(db, 'refresh', 'success', user_id=session['user_id'], email=session['email'], ip_address=get_client_ip(request))
     db.commit()
 
+    set_refresh_cookie(response, new_refresh_token)
     # The full profile is re-read rather than assembled from the session join, so a
     # refresh cannot return a user that is missing fields the client depends on.
-    return build_auth_payload(db, session['user_id'], access_token, new_refresh_token)
+    return build_auth_payload(db, session['user_id'], access_token)
 
 
 @router.post('/auth/logout')
-def logout(payload: LogoutRequest, request: Request, db=Depends(get_db)):
+def logout(request: Request, response: Response, payload: LogoutRequest | None = None, db=Depends(get_db)):
+    clear_refresh_cookie(response)
+    presented = presented_refresh_token(request, payload)
+    if not presented:
+        return {'message': 'Logged out successfully'}
     cur = db.cursor()
-    refresh_hash = hash_token(payload.refresh_token)
-    cur.execute('SELECT id, user_id FROM user_sessions WHERE token_hash = %s LIMIT 1;', (refresh_hash,))
-    session = cur.fetchone()
+    refresh_hash = hash_token(presented)
     cur.execute(
-        'UPDATE user_sessions SET revoked_at = NOW() WHERE token_hash = %s AND revoked_at IS NULL;',
-        (refresh_hash,),
+        """
+        UPDATE user_sessions SET revoked_at = NOW()
+        WHERE (token_hash = %s OR previous_token_hash = %s) AND revoked_at IS NULL
+        RETURNING id, user_id;
+        """,
+        (refresh_hash, refresh_hash),
     )
+    session = cur.fetchone()
     log_auth_event(
         db,
         'logout',
@@ -806,6 +915,150 @@ def revoke_other_sessions(request: Request, user_id: str = Depends(get_current_u
                    details={'count': count})
     db.commit()
     return {'message': f"Signed out of {count} other device{'' if count == 1 else 's'}", 'count': count}
+
+
+# --- two-step sign-in ------------------------------------------------------------------------
+
+def _mfa_user(db, user_id) -> dict:
+    cur = db.cursor()
+    cur.execute(
+        'SELECT id, email, role, password_hash, totp_secret, totp_pending_secret, totp_enabled_at, totp_last_step FROM users WHERE id = %s;',
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail='User not found')
+    return row
+
+
+def _confirm_password(db, row: dict, password: str) -> None:
+    enforce(db, f'mfa-password:user:{row["id"]}', 10, 3600, 'Too many attempts. Try again in an hour.')
+    if not pwd_context.verify(password or '', row['password_hash']):
+        raise HTTPException(status_code=401, detail='Invalid password')
+
+
+def _confirm_code(db, row: dict, code: str) -> str:
+    enforce(db, f'mfa:user:{row["id"]}', 5, 900, 'Too many wrong codes. Wait a few minutes and try again.')
+    method = mfa.check_second_factor(db.cursor(), row, code)
+    if not method:
+        db.commit()
+        raise HTTPException(status_code=400, detail='That code is not right.')
+    return method
+
+
+def admin_mfa_required(db) -> bool:
+    return bool(get_site_settings(db).get('require_admin_mfa'))
+
+
+@router.get('/auth/mfa')
+def mfa_status(user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    row = _mfa_user(db, user_id)
+    enabled = row['totp_enabled_at'] is not None
+    return {
+        'enabled': enabled,
+        'enabled_at': row['totp_enabled_at'].isoformat() if enabled else None,
+        'recovery_codes_remaining': mfa.remaining_recovery_codes(db.cursor(), user_id) if enabled else 0,
+        # An admin on a site that demands it cannot switch it off again.
+        'required': row['role'] == 'admin' and admin_mfa_required(db),
+    }
+
+
+@router.post('/auth/mfa/setup')
+def mfa_setup(payload: PasswordConfirmRequest, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    """A new secret, held as pending until a code from it proves the app has it.
+
+    The password is asked again so a session left open on someone else's computer
+    cannot attach that person's phone to the account.
+    """
+    row = _mfa_user(db, user_id)
+    _confirm_password(db, row, payload.password)
+    if row['totp_enabled_at'] is not None:
+        raise HTTPException(status_code=400, detail='Two-step sign-in is already on.')
+    secret = mfa.generate_secret()
+    cur = db.cursor()
+    cur.execute('UPDATE users SET totp_pending_secret = %s WHERE id = %s;', (secret, user_id))
+    db.commit()
+    return {'secret': secret, 'otpauth_uri': mfa.provisioning_uri(secret, row['email'])}
+
+
+@router.post('/auth/mfa/enable')
+def mfa_enable(payload: MfaCodeRequest, request: Request, user_id: str = Depends(get_current_user_id),
+               session_id: int | None = Depends(get_current_session_id), db=Depends(get_db)):
+    row = _mfa_user(db, user_id)
+    if row['totp_enabled_at'] is not None:
+        raise HTTPException(status_code=400, detail='Two-step sign-in is already on.')
+    if not row['totp_pending_secret']:
+        raise HTTPException(status_code=400, detail='Start the setup again.')
+    enforce(db, f'mfa:user:{user_id}', 5, 900, 'Too many wrong codes. Wait a few minutes and try again.')
+    step = mfa.verify_code(row['totp_pending_secret'], payload.code, None)
+    if step is None:
+        raise HTTPException(status_code=400, detail='That code is not right. Check the time on your phone and try the next one.')
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        UPDATE users
+        SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_enabled_at = NOW(), totp_last_step = %s
+        WHERE id = %s;
+        """,
+        (step, user_id),
+    )
+    codes = mfa.replace_recovery_codes(cur, user_id)
+    # Every other device signed in on the password alone; from now on that is not enough.
+    signed_out = 0
+    if session_id is not None:
+        cur.execute(
+            'UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND id <> %s AND revoked_at IS NULL;',
+            (user_id, session_id),
+        )
+        signed_out = cur.rowcount
+    cur.execute('DELETE FROM rate_limit_events WHERE key = %s;', (f'mfa:user:{user_id}',))
+    notify(cur, user_id, row['email'], 'Two-step sign-in is on for your Mileage account', [
+        'Signing in now takes your password and a code from your authenticator app.',
+        'If this was not you, reset your password straight away and reply to this message.',
+    ])
+    log_auth_event(db, 'mfa_enable', 'success', user_id=user_id, email=row['email'], ip_address=get_client_ip(request),
+                   details={'signed_out_sessions': signed_out})
+    db.commit()
+    return {'recovery_codes': codes, 'signed_out_sessions': signed_out}
+
+
+@router.post('/auth/mfa/disable')
+def mfa_disable(payload: MfaDisableRequest, request: Request, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    row = _mfa_user(db, user_id)
+    if row['totp_enabled_at'] is None:
+        return {'message': 'Two-step sign-in was not on'}
+    if row['role'] == 'admin' and admin_mfa_required(db):
+        raise HTTPException(status_code=400, detail='Admins must keep two-step sign-in on. An admin can lift that in Admin › Site settings.')
+    _confirm_password(db, row, payload.password)
+    _confirm_code(db, row, payload.code)
+    cur = db.cursor()
+    cur.execute(
+        'UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled_at = NULL, totp_last_step = NULL WHERE id = %s;',
+        (user_id,),
+    )
+    cur.execute('DELETE FROM mfa_recovery_codes WHERE user_id = %s;', (user_id,))
+    notify(cur, user_id, row['email'], 'Two-step sign-in is off for your Mileage account', [
+        'Signing in now takes only your password again.',
+        'If this was not you, reset your password straight away and reply to this message.',
+    ])
+    log_auth_event(db, 'mfa_disable', 'success', user_id=user_id, email=row['email'], ip_address=get_client_ip(request))
+    db.commit()
+    return {'message': 'Two-step sign-in is off'}
+
+
+@router.post('/auth/mfa/recovery-codes')
+def mfa_new_recovery_codes(payload: MfaCodeRequest, request: Request, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    """Ten fresh codes; the old ones stop working. Needs a current code, not just the session."""
+    row = _mfa_user(db, user_id)
+    if row['totp_enabled_at'] is None:
+        raise HTTPException(status_code=400, detail='Two-step sign-in is not on.')
+    _confirm_code(db, row, payload.code)
+    cur = db.cursor()
+    codes = mfa.replace_recovery_codes(cur, user_id)
+    log_auth_event(db, 'mfa_recovery_codes', 'success', user_id=user_id, email=row['email'], ip_address=get_client_ip(request))
+    db.commit()
+    return {'recovery_codes': codes}
 
 
 # --- data export and deletion ----------------------------------------------------------------

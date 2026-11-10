@@ -45,7 +45,7 @@ alembic revision -m "describe change"
 
 ### Testing
 
-There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and `scripts/qa-accounts.py` goes deeper: two throwaway accounts, tenant isolation between them, then verification, sessions, export, feedback, scheduled deletion and the login limit, cleaning up after itself. `scripts/qa-fleet.py` does the same for fleets: owner, manager, driver and outsider, what each can reach, invitations, reassignment and removal. Both need registration open and the dev containers. CI only builds images. If you add tests you are setting the convention.
+There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and `scripts/qa-accounts.py` goes deeper: two throwaway accounts, tenant isolation between them, then verification, sessions, export, feedback, scheduled deletion and the login limit, cleaning up after itself. `scripts/qa-fleet.py` does the same for fleets: owner, manager, driver and outsider, what each can reach, invitations, reassignment and removal. `scripts/qa-mfa.py` covers the refresh cookie (attributes, rotation, grace period) and two-step sign-in, including the admin requirement. All three need registration open and the dev containers. CI only builds images. If you add tests you are setting the convention.
 
 For UI work, a headless Chromium is available at `/snap/bin/chromium` and `puppeteer-core` drives it. Layout shift, loading flicker and unit formatting have all been verified that way — lint and build catch none of them.
 
@@ -100,6 +100,10 @@ The API is only reached through the frontend's nginx, which resolves the real cl
 
 Sign-up records `terms_accepted_at`/`terms_version` and queues a confirmation link. `require_email_verification` (site setting, off by default) makes `require_write_access` refuse unconfirmed accounts with 403 — leave it off until outgoing mail works, or nobody new can record anything. Access tokens carry `sid`, the refresh session they belong to, which is how the session list marks "this device". Self-service deletion revokes every session and waits 30 days; signing in shows a banner that cancels it.
 
+**The refresh token is an httpOnly, Secure, SameSite=Strict cookie (`mileage_refresh`, path `/api/auth`) and never appears in a response body.** The access token lives only in `api.js` memory, so every page load restores the session through `/auth/refresh`. The cookie path is the one the browser sees — nginx strips `/api` — so scripts calling the backend directly on :4646 read the `Set-Cookie` header and send the token in the body, which is still accepted (also for one release of browsers holding a pre-cookie token in localStorage). Rotation keeps `previous_token_hash` valid for `REFRESH_GRACE_SECONDS`, and `api.js` serialises refreshes across tabs with Web Locks: every tab shares the one cookie.
+
+Two-step sign-in is TOTP (`backend/mfa.py`, RFC 6238 written out, no dependency) with ten hashed single-use recovery codes. With it on, `/auth/login` answers `{mfa_required, mfa_token}` — a five-minute challenge signed under a *different* key, so it is useless as an access token — and `/auth/login/mfa` opens the session. `totp_last_step` stops a code being replayed. Enabling it signs out every other session. The `require_admin_mfa` site setting keeps admins without it out of `require_admin_user` (403 + `X-Mileage-Mfa-Required`); it cannot be saved by an admin who would be locked out. The TOTP secret is stored in plain text, like the password hash beside it — a database leak is already the worst case.
+
 ### Units and currency
 
 Distance is stored in kilometres and volume in litres; the client converts for display, which is why `_km` and `_kwh` suffixes on API fields are accurate and worth keeping.
@@ -134,7 +138,7 @@ There is no runtime DDL left. The schema comes from migrations, and the app role
 
 ## Frontend
 
-- **`utils/api.js` is the only way to call the API.** `apiFetch` attaches the token and retries once through a refresh on 401. The refresh is single-flighted because the endpoint *rotates* the refresh token — two concurrent refreshes log the user out. Never read `localStorage` directly in a component.
+- **`utils/api.js` is the only way to call the API.** `apiFetch` attaches the in-memory access token and retries once through a refresh on 401. The refresh is single-flighted because the endpoint *rotates* the refresh token — two concurrent refreshes log the user out. Never read `localStorage` directly in a component.
 - `context/AuthContext.jsx` holds user and subscription state and consumes the same refresh implementation.
 - Routes are imported directly, not lazily. Page chunks were a few kB against 220 kB of MUI and Recharts, and each navigation paid for them with a Suspense fallback that flickered.
 - `components/RecordDialog.jsx` is the single entry point for creating and editing both sessions and costs. Records lives at `/activity`, with the tab in the URL (`?tab=recurring`).

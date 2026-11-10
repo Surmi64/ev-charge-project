@@ -35,6 +35,19 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', '30'))
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = int(os.environ.get('PASSWORD_RESET_TOKEN_EXPIRE_MINUTES', '30'))
 
+# The refresh token travels in an httpOnly cookie, out of reach of page scripts, so an
+# XSS bug can at worst use a 30 minute access token while the page is open — it cannot
+# carry the 30 day session away. The path is the one the *browser* sees: nginx strips
+# `/api` before the backend, so the backend's own `/auth/refresh` is `/api/auth/refresh`
+# out there. Secure stays on even in development: browsers accept Secure cookies from
+# http://localhost, and the dev server is reached over HTTPS.
+REFRESH_COOKIE_NAME = os.environ.get('REFRESH_COOKIE_NAME', 'mileage_refresh')
+REFRESH_COOKIE_PATH = os.environ.get('REFRESH_COOKIE_PATH', '/api/auth')
+REFRESH_COOKIE_SECURE = os.environ.get('REFRESH_COOKIE_SECURE', 'true').strip().lower() not in {'0', 'false', 'no'}
+# How long the token a rotation replaced is still honoured. Covers a refresh whose
+# response never reached the browser (a reload mid-request), not a second user.
+REFRESH_GRACE_SECONDS = int(os.environ.get('REFRESH_GRACE_SECONDS', '120'))
+
 CORS_ALLOW_ORIGINS = [
 	origin.strip()
 	for origin in os.environ.get(

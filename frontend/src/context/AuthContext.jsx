@@ -3,8 +3,9 @@ import AuthContext from './auth-context';
 import {
   apiFetch,
   clearStoredSession,
-  getRefreshToken,
+  endSession,
   getToken,
+  mayHaveSession,
   onPaymentRequired,
   onSessionExpired,
   onWorkspaceInvalid,
@@ -16,7 +17,6 @@ import {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(getToken());
-  const [refreshToken, setRefreshToken] = useState(getRefreshToken());
   const [loading, setLoading] = useState(true);
   const [subscription, setSubscription] = useState(null);
   const [workspace, setWorkspaceState] = useState(null);
@@ -24,7 +24,6 @@ export const AuthProvider = ({ children }) => {
   const clearSession = useCallback(() => {
     setUser(null);
     setToken(null);
-    setRefreshToken(null);
     setSubscription(null);
     setWorkspaceState(null);
     clearStoredSession();
@@ -83,7 +82,6 @@ export const AuthProvider = ({ children }) => {
     onSessionExpired(() => {
       setUser(null);
       setToken(null);
-      setRefreshToken(null);
     });
     return () => onSessionExpired(null);
   }, []);
@@ -95,7 +93,6 @@ export const AuthProvider = ({ children }) => {
       return null;
     }
     setToken(data.access_token);
-    setRefreshToken(data.refresh_token);
     setUser(data.user);
     return data.access_token;
   }, [clearSession]);
@@ -104,17 +101,17 @@ export const AuthProvider = ({ children }) => {
     let active = true;
 
     const restoreSession = async () => {
-      if (!getToken() && !getRefreshToken()) {
+      // The access token is held in memory only, so every page load starts without
+      // one and asks the refresh cookie for a new one.
+      if (!mayHaveSession()) {
         if (active) setLoading(false);
         return;
       }
 
-      if (!getToken() && getRefreshToken()) {
-        const refreshed = await refreshAuthToken();
-        if (!refreshed) {
-          if (active) setLoading(false);
-          return;
-        }
+      const refreshed = await refreshAuthToken();
+      if (!refreshed) {
+        if (active) setLoading(false);
+        return;
       }
 
       // apiFetch retries through a refresh on its own if the access token expired.
@@ -145,21 +142,24 @@ export const AuthProvider = ({ children }) => {
     };
   }, [refreshAuthToken, clearSession, refreshSubscription, refreshWorkspace]);
 
+  // Keyed on being signed in, not on the user object, which every refresh replaces.
+  const signedIn = Boolean(user);
   useEffect(() => {
-    if (!refreshToken) return undefined;
+    if (!signedIn) return undefined;
 
     const intervalId = window.setInterval(() => {
       refreshAuthToken().catch(() => clearSession());
     }, 10 * 60 * 1000);
 
     return () => window.clearInterval(intervalId);
-  }, [refreshToken, refreshAuthToken, clearSession]);
+  }, [signedIn, refreshAuthToken, clearSession]);
 
-  const login = (userData, accessToken, nextRefreshToken) => {
+  // The refresh token arrived as a cookie with the same response; only the access
+  // token is handed over here.
+  const login = (userData, accessToken) => {
     setUser(userData);
     setToken(accessToken);
-    setRefreshToken(nextRefreshToken);
-    persistSession(accessToken, nextRefreshToken);
+    persistSession(accessToken);
     refreshSubscription().catch(() => {});
     refreshWorkspace().catch(() => {});
   };
@@ -169,18 +169,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    const currentRefreshToken = getRefreshToken();
-    if (currentRefreshToken) {
-      try {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: currentRefreshToken }),
-        });
-      } catch {
-        // Best effort logout; the local session is cleared either way.
-      }
-    }
+    await endSession();
     clearSession();
   };
 
@@ -203,7 +192,6 @@ export const AuthProvider = ({ children }) => {
         inFleetWorkspace: Boolean(workspace && !workspace.is_own),
         canManage: workspace ? workspace.can_manage : true,
         token,
-        refreshToken,
         login,
         logout,
         updateUser,

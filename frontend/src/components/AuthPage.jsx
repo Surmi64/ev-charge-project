@@ -42,6 +42,11 @@ const AuthPage = ({ mode = 'login' }) => {
   // Server-side rejections keyed by field, e.g. a name already in use. Cleared as
   // soon as that field is edited, so the message never outlives the problem.
   const [serverErrors, setServerErrors] = useState({});
+  // Set once the password checked out on an account with two-step sign-in: the
+  // short-lived challenge the code step is sent with. Null on the password step.
+  const [challenge, setChallenge] = useState(null);
+  const [code, setCode] = useState('');
+  const codeRef = useRef(null);
   const { login, authenticated } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -138,14 +143,19 @@ const AuthPage = ({ mode = 'login' }) => {
           email: values.email.trim(),
           password: values.password,
         });
-        login(session.user, session.access_token, session.refresh_token);
+        login(session.user, session.access_token);
         toast.success(`Welcome to Mileage, ${session.user.username}.`);
       } else {
         const session = await postJson('/api/auth/login', {
           email: values.email.trim(),
           password: values.password,
         });
-        login(session.user, session.access_token, session.refresh_token);
+        if (session.mfa_required) {
+          setChallenge(session.mfa_token);
+          setCode('');
+          return;
+        }
+        login(session.user, session.access_token);
         toast.success(`Welcome back, ${session.user.username}.`);
       }
       navigate(next);
@@ -162,6 +172,84 @@ const AuthPage = ({ mode = 'login' }) => {
       setSubmitting(false);
     }
   };
+
+  const leaveCodeStep = () => {
+    setChallenge(null);
+    setCode('');
+    setFormError('');
+    setValues((previous) => ({ ...previous, password: '' }));
+  };
+
+  const submitCode = async (event) => {
+    event.preventDefault();
+    if (submitting) return;
+    if (!code.trim()) {
+      setFormError('Enter the code from your authenticator app.');
+      codeRef.current?.focus();
+      return;
+    }
+    setSubmitting(true);
+    setFormError('');
+    try {
+      const session = await postJson('/api/auth/login/mfa', { mfa_token: challenge, code: code.trim() });
+      login(session.user, session.access_token);
+      toast.success(`Welcome back, ${session.user.username}.`);
+      navigate(next);
+    } catch (error) {
+      // The challenge lasts five minutes; past that only the password step can help.
+      if (/too long/i.test(error.message)) {
+        leaveCodeStep();
+        setFormError(error.message);
+        passwordRef.current?.focus();
+      } else {
+        setFormError(error.message);
+        setCode('');
+        codeRef.current?.focus();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (challenge) {
+    return (
+      <AuthLayout
+        kicker="Two-step sign-in"
+        title="Enter your code"
+        subtitle="Open your authenticator app and type the 6-digit code it shows for Mileage."
+      >
+        <form onSubmit={submitCode} noValidate>
+          <Stack spacing={2.25}>
+            {formError ? <Alert severity="error" role="alert">{formError}</Alert> : null}
+            <TextField
+              fullWidth
+              inputRef={codeRef}
+              label="Code"
+              value={code}
+              onChange={(event) => { setCode(event.target.value); setFormError(''); }}
+              autoComplete="one-time-code"
+              autoFocus
+              slotProps={{ htmlInput: { inputMode: 'text', spellCheck: false, autoCapitalize: 'none', maxLength: 32 } }}
+              helperText="Lost your phone? Enter one of your recovery codes instead."
+            />
+            <Button
+              type="submit"
+              fullWidth
+              variant="contained"
+              disabled={submitting}
+              sx={{ py: 1.5 }}
+              startIcon={submitting ? <CircularProgress size={17} color="inherit" /> : null}
+            >
+              {submitting ? 'Checking…' : 'Sign in'}
+            </Button>
+            <Link component="button" type="button" underline="hover" onClick={leaveCodeStep} sx={{ alignSelf: 'center', fontWeight: 600, fontSize: '0.86rem' }}>
+              Use a different account
+            </Link>
+          </Stack>
+        </form>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout

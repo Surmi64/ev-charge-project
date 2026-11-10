@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   Box,
   Typography,
   Paper,
@@ -28,6 +29,7 @@ import {
   DeleteForeverOutlined as DeleteIcon,
   LockResetOutlined as ResetTokenIcon,
   LogoutOutlined as ForceLogoutIcon,
+  PhonelinkEraseOutlined as ResetMfaIcon,
 } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { useAuth } from '../context/useAuth';
@@ -55,10 +57,17 @@ function UserManagement({ embedded = false }) {
   const [savingUserId, setSavingUserId] = useState(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetTokenData, setResetTokenData] = useState(null);
+  const [pendingMfaReset, setPendingMfaReset] = useState(null);
+  const [adminNeedsMfa, setAdminNeedsMfa] = useState(false);
 
   const fetchUsers = async () => {
     try {
       const res = await apiFetch('/api/admin/users');
+      // The site requires admins to use two-step sign-in and this one does not yet.
+      if (res.status === 403 && res.headers.get('X-Mileage-Mfa-Required')) {
+        setAdminNeedsMfa(true);
+        return;
+      }
       if (!res.ok) throw new Error('Failed to load users');
       setUsers(await res.json());
     } catch (error) {
@@ -160,8 +169,32 @@ function UserManagement({ embedded = false }) {
     }
   };
 
+  const handleResetMfa = async () => {
+    const targetUser = pendingMfaReset;
+    setPendingMfaReset(null);
+    setSavingUserId(targetUser.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/reset-mfa`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Could not reset two-step sign-in');
+      toast.success(`Two-step sign-in reset for ${targetUser.email}`);
+      await fetchUsers();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSavingUserId(null);
+    }
+  };
+
   if (showSkeleton) return <TableSectionSkeleton rows={4} />;
   if (loading) return null;
+  if (adminNeedsMfa) {
+    return (
+      <Alert severity="warning" action={<Button color="inherit" size="small" href="/account?tab=security">Set it up</Button>}>
+        This site requires admins to use two-step sign-in. Turn it on in Account › Security to manage users.
+      </Alert>
+    );
+  }
 
   return (
     <Box className={embedded ? undefined : 'section-shell stagger'}>
@@ -199,7 +232,12 @@ function UserManagement({ embedded = false }) {
                       <Typography variant="caption" color="text.secondary">Current session</Typography>
                     ) : null}
                   </TableCell>
-                  <TableCell>{entry.email}</TableCell>
+                  <TableCell>
+                    {entry.email}
+                    {entry.mfa_enabled ? (
+                      <Chip size="small" variant="outlined" color="success" label="2-step" sx={{ ml: 1, height: 20 }} />
+                    ) : null}
+                  </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
                       <Chip size="small" label={entry.role} variant="outlined" sx={(theme) => roleChipSx(theme, entry.role)} />
@@ -252,6 +290,21 @@ function UserManagement({ embedded = false }) {
                           </IconButton>
                         </span>
                       </Tooltip>
+                      {entry.mfa_enabled && entry.id !== user?.id ? (
+                        <Tooltip title="Reset two-step sign-in (lost phone and recovery codes)">
+                          <span>
+                            <IconButton
+                              size="small"
+                              sx={{ p: 1.25 }}
+                              aria-label={`Reset two-step sign-in for ${entry.email}`}
+                              disabled={savingUserId === entry.id}
+                              onClick={() => setPendingMfaReset(entry)}
+                            >
+                              <ResetMfaIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      ) : null}
                       <Tooltip
                         title={
                           entry.id === user?.id ? 'You cannot delete your own account'
@@ -323,6 +376,20 @@ function UserManagement({ embedded = false }) {
           >
             {deleting ? 'Deleting…' : 'Delete account'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!pendingMfaReset} onClose={() => setPendingMfaReset(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Reset two-step sign-in?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {pendingMfaReset?.email} will be signed out everywhere and can then sign in with the password alone.
+            Do this only once you are sure who is asking — whoever has the password gets in.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingMfaReset(null)}>Cancel</Button>
+          <Button color="warning" variant="contained" onClick={handleResetMfa}>Reset</Button>
         </DialogActions>
       </Dialog>
 

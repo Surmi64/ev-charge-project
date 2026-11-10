@@ -60,6 +60,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version VARCHAR(20);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_scheduled_for TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- Two-step sign-in (Alembic 20261112_000025): the confirmed authenticator secret, the
+-- one being set up, when it was switched on, and the last time step accepted.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(64);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret VARCHAR(64);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_uidx ON users (LOWER(username));
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_uidx ON users (LOWER(email));
@@ -76,6 +82,21 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 
 ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(255);
 ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip_address VARCHAR(64);
+-- The refresh cookie is shared by every tab; the token it held before the last rotation
+-- stays valid for a short grace period (Alembic 20261112_000025).
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS previous_token_hash VARCHAR(255);
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS rotated_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS user_sessions_previous_token_hash_idx
+    ON user_sessions (previous_token_hash) WHERE previous_token_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash VARCHAR(64) NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS mfa_recovery_codes_user_idx ON mfa_recovery_codes (user_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS user_sessions_token_hash_uidx ON user_sessions (token_hash);
 CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
@@ -620,7 +641,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20261111_000024'
+SELECT '20261112_000025'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;
