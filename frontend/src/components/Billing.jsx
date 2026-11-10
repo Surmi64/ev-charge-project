@@ -30,7 +30,7 @@ const formatPrice = (cents, currency) =>
 
 const Billing = () => {
   const theme = useTheme();
-  const { subscription, refreshSubscription } = useAuth();
+  const { subscription, refreshSubscription, workspace, switchWorkspace } = useAuth();
   const [plans, setPlans] = useState(null);
   const [trialDays, setTrialDays] = useState(30);
 
@@ -59,6 +59,16 @@ const Billing = () => {
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
         Your plan, renewal date and what happens when it lapses.
       </Typography>
+
+      {/* In a fleet the owner's plan is the one that counts, and only the owner can
+          change it; this page still shows its state, so a driver knows why they can
+          or cannot record. */}
+      {subscription?.managed_by_fleet_owner ? (
+        <Alert severity="info" variant="outlined" sx={{ mb: 3, maxWidth: 760 }}
+          action={<Button color="inherit" size="small" onClick={() => switchWorkspace(null)}>My account</Button>}>
+          This is {workspace?.owner_name}&apos;s fleet plan. It covers what you record here; only {workspace?.owner_name} can change it.
+        </Alert>
+      ) : null}
 
       <Card sx={{ ...getCategoryBoxSx(theme, 'other'), p: 3, borderRadius: 4, mb: 3, maxWidth: 760 }}>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>

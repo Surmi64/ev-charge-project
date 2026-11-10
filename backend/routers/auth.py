@@ -26,7 +26,7 @@ try:
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
     from backend.site_settings import get_site_settings
-    from backend.billing import get_tenant_db
+    from backend.billing import get_own_db
     from backend.schemas import (
         AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
         UserLogin, UserRegister, VerifyEmailRequest,
@@ -39,7 +39,7 @@ except ModuleNotFoundError:
     from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
     from site_settings import get_site_settings
-    from billing import get_tenant_db
+    from billing import get_own_db
     from schemas import (
         AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
         UserLogin, UserRegister, VerifyEmailRequest,
@@ -820,7 +820,7 @@ def _export_value(value):
 
 
 @router.get('/auth/export')
-def export_account(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def export_account(user_id: str = Depends(get_current_user_id), db=Depends(get_own_db)):
     """Everything the account holds, as one JSON document — the GDPR copy of the data.
 
     Never gated on the subscription, like the CSV export: a lapsed account keeps the

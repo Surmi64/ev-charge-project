@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import AuthContext from './auth-context';
 import {
   apiFetch,
@@ -7,8 +7,10 @@ import {
   getToken,
   onPaymentRequired,
   onSessionExpired,
+  onWorkspaceInvalid,
   persistSession,
   refreshAccessToken,
+  setWorkspace,
 } from '../utils/api';
 
 export const AuthProvider = ({ children }) => {
@@ -17,13 +19,35 @@ export const AuthProvider = ({ children }) => {
   const [refreshToken, setRefreshToken] = useState(getRefreshToken());
   const [loading, setLoading] = useState(true);
   const [subscription, setSubscription] = useState(null);
+  const [workspace, setWorkspaceState] = useState(null);
 
   const clearSession = useCallback(() => {
     setUser(null);
     setToken(null);
     setRefreshToken(null);
     setSubscription(null);
+    setWorkspaceState(null);
     clearStoredSession();
+  }, []);
+
+  // Whose records this tab is working on, and what the person may do there. Read
+  // after sign-in and after every switch; a failure leaves the own-account default.
+  const refreshWorkspace = useCallback(async () => {
+    const res = await apiFetch('/api/fleet/context');
+    if (!res.ok) {
+      setWorkspaceState(null);
+      return null;
+    }
+    const data = await res.json();
+    setWorkspaceState(data);
+    return data;
+  }, []);
+
+  // Every page holds data fetched for the old workspace, so a switch reloads rather
+  // than trying to invalidate each one.
+  const switchWorkspace = useCallback((ownerId) => {
+    setWorkspace(ownerId);
+    window.location.assign('/');
   }, []);
 
   const refreshSubscription = useCallback(async () => {
@@ -42,6 +66,16 @@ export const AuthProvider = ({ children }) => {
     });
     return () => onPaymentRequired(null);
   }, [refreshSubscription]);
+
+  // The fleet named in the header is gone (removed, or left elsewhere): api.js has
+  // dropped the header, so re-read both and the app falls back to the own account.
+  useEffect(() => {
+    onWorkspaceInvalid(() => {
+      refreshWorkspace().catch(() => {});
+      refreshSubscription().catch(() => {});
+    });
+    return () => onWorkspaceInvalid(null);
+  }, [refreshWorkspace, refreshSubscription]);
 
   // utils/api owns the refresh call (it single-flights it, because the endpoint
   // rotates the refresh token). This keeps React state in step when it gives up.
@@ -88,7 +122,12 @@ export const AuthProvider = ({ children }) => {
       if (res.ok) {
         const data = await res.json();
         if (active) setUser(data);
-        await refreshSubscription().catch(() => {});
+        // Both before loading ends: in a fleet the overlay decides the currency and
+        // whether onboarding shows, and a first frame without it would flash both.
+        await Promise.all([
+          refreshSubscription().catch(() => {}),
+          refreshWorkspace().catch(() => {}),
+        ]);
       } else {
         clearSession();
       }
@@ -104,7 +143,7 @@ export const AuthProvider = ({ children }) => {
     return () => {
       active = false;
     };
-  }, [refreshAuthToken, clearSession, refreshSubscription]);
+  }, [refreshAuthToken, clearSession, refreshSubscription, refreshWorkspace]);
 
   useEffect(() => {
     if (!refreshToken) return undefined;
@@ -122,6 +161,7 @@ export const AuthProvider = ({ children }) => {
     setRefreshToken(nextRefreshToken);
     persistSession(accessToken, nextRefreshToken);
     refreshSubscription().catch(() => {});
+    refreshWorkspace().catch(() => {});
   };
 
   const updateUser = (newUserData) => {
@@ -144,10 +184,24 @@ export const AuthProvider = ({ children }) => {
     clearSession();
   };
 
+  // In a fleet workspace the records are the owner's, so the settings they are read
+  // through — currency, units, what cost per km counts — are the owner's too. `user`
+  // carries them overlaid for every formatter and chart; `account` is the person's
+  // own row, for the pages that edit it.
+  const viewUser = useMemo(() => (
+    user && workspace?.preferences ? { ...user, ...workspace.preferences } : user
+  ), [user, workspace]);
+
   return (
     <AuthContext.Provider
       value={{
-        user,
+        user: viewUser,
+        account: user,
+        workspace,
+        refreshWorkspace,
+        switchWorkspace,
+        inFleetWorkspace: Boolean(workspace && !workspace.is_own),
+        canManage: workspace ? workspace.can_manage : true,
         token,
         refreshToken,
         login,

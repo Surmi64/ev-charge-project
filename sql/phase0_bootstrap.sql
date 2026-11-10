@@ -208,6 +208,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     currency VARCHAR(10) NOT NULL DEFAULT 'HUF',
     date DATE NOT NULL,
     description TEXT,
+    -- Who entered it, from the request's binding (fleets: owner, manager or driver).
+    recorded_by BIGINT REFERENCES users(id) ON DELETE SET NULL DEFAULT NULLIF(current_setting('app.actor_id', true), '')::bigint,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT expenses_amount_chk CHECK (amount >= 0)
 );
@@ -249,6 +251,8 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     battery_level_end SMALLINT,
     odometer NUMERIC(10,1),
     notes TEXT,
+    -- Who entered it, from the request's binding (fleets: owner, manager or driver).
+    recorded_by BIGINT REFERENCES users(id) ON DELETE SET NULL DEFAULT NULLIF(current_setting('app.actor_id', true), '')::bigint,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT charging_sessions_cost_chk CHECK (cost_amount >= 0),
     CONSTRAINT charging_sessions_kwh_chk CHECK (kwh IS NULL OR kwh >= 0),
@@ -257,6 +261,45 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
     CONSTRAINT charging_sessions_battery_end_chk CHECK (battery_level_end IS NULL OR battery_level_end BETWEEN 0 AND 100),
     CONSTRAINT charging_sessions_odometer_chk CHECK (odometer IS NULL OR odometer >= 0)
 );
+
+-- ---------------------------------------------------------------------------
+-- Fleets: other accounts let into an owner's workspace (Alembic 20261111_000024)
+--
+-- A member's request runs with app.user_id = the owner, so the tenant policies apply
+-- unchanged; a driver's also sets app.vehicle_ids to the cars assigned to them.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS fleet_members (
+    id BIGSERIAL PRIMARY KEY,
+    owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    member_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('manager', 'driver')),
+    vehicle_ids BIGINT[] NOT NULL DEFAULT '{}',
+    invited_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fleet_members_unique UNIQUE (owner_id, member_id),
+    CONSTRAINT fleet_members_not_self CHECK (owner_id <> member_id)
+);
+
+CREATE INDEX IF NOT EXISTS fleet_members_member_idx ON fleet_members (member_id);
+
+CREATE TABLE IF NOT EXISTS fleet_invitations (
+    id BIGSERIAL PRIMARY KEY,
+    owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('manager', 'driver')),
+    vehicle_ids BIGINT[] NOT NULL DEFAULT '{}',
+    token_hash VARCHAR(128) NOT NULL UNIQUE,
+    invited_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ,
+    accepted_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS fleet_invitations_email_idx ON fleet_invitations (lower(email));
 
 -- ---------------------------------------------------------------------------
 -- Feedback: ideas, bug reports and complaints, with their reply thread
@@ -476,11 +519,30 @@ DO $$
 DECLARE
     tenant_table TEXT;
     admin_table TEXT;
+    vehicle_column TEXT;
 BEGIN
-    -- User content: reachable only by its owner. No admin escape on purpose.
+    -- User content bound to a vehicle: the tenant, and within it the vehicles in
+    -- app.vehicle_ids when that is set (a fleet driver's request). Unset or empty means
+    -- every vehicle. COALESCE inside the cast because OR does not promise to
+    -- short-circuit, and ''::bigint[] fails. No admin escape on purpose.
     FOREACH tenant_table IN ARRAY ARRAY['vehicles', 'charging_sessions', 'expenses',
-                                        'vehicle_events', 'recurring_expense_reminders',
-                                        'places']
+                                        'vehicle_events', 'recurring_expense_reminders']
+    LOOP
+        vehicle_column := CASE WHEN tenant_table = 'vehicles' THEN 'id' ELSE 'vehicle_id' END;
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I;', tenant_table || '_tenant_isolation', tenant_table);
+        EXECUTE format(
+            'CREATE POLICY %1$I ON %2$I USING (%3$s) WITH CHECK (%3$s);',
+            tenant_table || '_tenant_isolation', tenant_table,
+            format('user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint'
+                   ' AND (NULLIF(current_setting(''app.vehicle_ids'', true), '''') IS NULL'
+                   ' OR %I = ANY(COALESCE(NULLIF(current_setting(''app.vehicle_ids'', true), ''''), ''{}'')::bigint[]))',
+                   vehicle_column));
+    END LOOP;
+
+    -- User content not tied to one vehicle: the tenant only.
+    FOREACH tenant_table IN ARRAY ARRAY['places']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tenant_table);
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', tenant_table);
@@ -520,6 +582,28 @@ BEGIN
             ' OR current_setting(''app.admin'', true) = ''on'');',
             admin_table || '_tenant_isolation', admin_table);
     END LOOP;
+
+    -- Fleet membership: the owner manages it, the member reads (and leaves) their own
+    -- row. app.actor_id is the person signed in, set before the workspace is known.
+    ALTER TABLE fleet_members ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE fleet_members FORCE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS fleet_members_tenant_isolation ON fleet_members;
+    CREATE POLICY fleet_members_tenant_isolation ON fleet_members
+        USING (owner_id = NULLIF(current_setting('app.user_id', true), '')::bigint
+               OR member_id = NULLIF(current_setting('app.actor_id', true), '')::bigint)
+        WITH CHECK (owner_id = NULLIF(current_setting('app.user_id', true), '')::bigint
+                    OR member_id = NULLIF(current_setting('app.actor_id', true), '')::bigint);
+
+    -- Invitations: the owner, plus app.fleet_invite for looking one up by token or by the
+    -- invitee's address, before the invitee belongs to anything.
+    ALTER TABLE fleet_invitations ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE fleet_invitations FORCE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS fleet_invitations_tenant_isolation ON fleet_invitations;
+    CREATE POLICY fleet_invitations_tenant_isolation ON fleet_invitations
+        USING (owner_id = NULLIF(current_setting('app.user_id', true), '')::bigint
+               OR current_setting('app.fleet_invite', true) = 'on')
+        WITH CHECK (owner_id = NULLIF(current_setting('app.user_id', true), '')::bigint
+                    OR current_setting('app.fleet_invite', true) = 'on');
 END
 $$;
 
@@ -536,7 +620,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20261110_000023'
+SELECT '20261111_000024'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

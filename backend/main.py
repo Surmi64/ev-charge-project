@@ -18,6 +18,7 @@ try:
     from backend.routers.billing import router as billing_router
     from backend.routers.expenses import router as expenses_router
     from backend.routers.feedback import router as feedback_router
+    from backend.routers.fleet import router as fleet_router
     from backend.routers.health import router as health_router
     from backend.routers.insights import router as insights_router
     from backend.routers.notifications import router as notifications_router
@@ -34,6 +35,7 @@ except ModuleNotFoundError:
     from routers.billing import router as billing_router
     from routers.expenses import router as expenses_router
     from routers.feedback import router as feedback_router
+    from routers.fleet import router as fleet_router
     from routers.health import router as health_router
     from routers.insights import router as insights_router
     from routers.notifications import router as notifications_router
@@ -161,3 +163,4 @@ app.include_router(places_router)
 app.include_router(insights_router)
 app.include_router(notifications_router)
 app.include_router(feedback_router)
+app.include_router(fleet_router)

@@ -9,6 +9,30 @@
 
 const TOKEN_KEY = 'token';
 const REFRESH_KEY = 'refreshToken';
+// The fleet whose records this tab works on: the owner's account id, or nothing for
+// the person's own account. Sent on every request; the server checks membership each
+// time, so a stale value costs one refused request, never someone else's data.
+const WORKSPACE_KEY = 'workspace';
+const WORKSPACE_HEADER = 'X-Mileage-Workspace';
+
+const readStorage = (key) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+export const getWorkspace = () => readStorage(WORKSPACE_KEY);
+
+export const setWorkspace = (ownerId) => {
+  try {
+    if (ownerId === null || ownerId === undefined) localStorage.removeItem(WORKSPACE_KEY);
+    else localStorage.setItem(WORKSPACE_KEY, String(ownerId));
+  } catch {
+    // Storage blocked: the switch lasts until the page reloads, which is acceptable.
+  }
+};
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getRefreshToken = () => localStorage.getItem(REFRESH_KEY);
@@ -21,6 +45,7 @@ export const persistSession = (accessToken, refreshToken) => {
 export const clearStoredSession = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_KEY);
+  setWorkspace(null);
 };
 
 // AuthContext registers here so it can drop React state when the session dies.
@@ -35,6 +60,13 @@ export const onSessionExpired = (handler) => {
 let paymentRequiredHandler = null;
 export const onPaymentRequired = (handler) => {
   paymentRequiredHandler = handler;
+};
+
+// Fired when the server says the workspace header names a fleet the person is no
+// longer in. The header is already cleared by then; the handler re-reads the context.
+let workspaceInvalidHandler = null;
+export const onWorkspaceInvalid = (handler) => {
+  workspaceInvalidHandler = handler;
 };
 
 let inFlightRefresh = null;
@@ -83,6 +115,8 @@ export const apiFetch = async (path, options = {}) => {
   const buildInit = (token) => {
     const headers = { ...(options.headers || {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
+    const workspace = getWorkspace();
+    if (workspace && !headers[WORKSPACE_HEADER]) headers[WORKSPACE_HEADER] = workspace;
     // Let the browser set the boundary for multipart bodies.
     if (options.body !== undefined && !(options.body instanceof FormData) && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
@@ -94,6 +128,12 @@ export const apiFetch = async (path, options = {}) => {
 
   if (response.status === 402) {
     paymentRequiredHandler?.();
+    return response;
+  }
+
+  if (response.status === 403 && response.headers.get('X-Mileage-Workspace-Invalid')) {
+    setWorkspace(null);
+    workspaceInvalidHandler?.();
     return response;
   }
 

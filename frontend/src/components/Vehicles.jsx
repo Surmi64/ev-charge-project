@@ -89,7 +89,8 @@ const validateVehicleForm = (formData) => {
 };
 
 const Vehicles = () => {
-  const { user } = useAuth();
+  // Drivers see their assigned cars; the fleet's vehicles are shaped by its managers.
+  const { user, canManage } = useAuth();
   const fmt = useMemo(() => createFormatters(user), [user]);
   // Hydrogen tanks are rated in kg, not volume.
   const tankUnit = (fuelType) => (fuelType === 'hydrogen' ? 'kg' : fmt.volumeShort);
@@ -330,7 +331,7 @@ const Vehicles = () => {
       </Typography>
 
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>Add Vehicle</Button>
+        {canManage ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>Add Vehicle</Button> : <span />}
         {archivedVehicles.length ? (
           <Button variant="outlined" onClick={() => setShowArchived((current) => !current)}>
             {showArchived ? 'Hide Archived' : `Show Archived (${archivedVehicles.length})`}
@@ -359,7 +360,7 @@ const Vehicles = () => {
                         <IconButton
                           onClick={() => toggleDefault(v)}
                           color={v.is_default ? "primary" : "default"}
-                          disabled={v.is_archived || busyVehicleId === v.id}
+                          disabled={!canManage || v.is_archived || busyVehicleId === v.id}
                           aria-pressed={!!v.is_default}
                         >
                           {v.is_default ? <StarIcon /> : <StarBorderIcon />}
@@ -399,6 +400,7 @@ const Vehicles = () => {
                     </Stack>
                   </TableCell>
                   <TableCell align="right">
+                    {canManage ? (<>
                     <Tooltip title="Edit vehicle">
                       <span>
                         <IconButton onClick={() => handleOpen(v)} size="small" color="primary" disabled={busyVehicleId === v.id}><EditIcon /></IconButton>
@@ -419,6 +421,7 @@ const Vehicles = () => {
                         <IconButton onClick={() => handleDeleteRequest(v)} size="small" color="error" disabled={busyVehicleId === v.id}><DeleteIcon /></IconButton>
                       </span>
                     </Tooltip>
+                    </>) : null}
                   </TableCell>
                 </TableRow>
               ))}
@@ -445,9 +448,15 @@ const Vehicles = () => {
               {archivedVehicles.length ? <Chip label="Restore archived history" variant="outlined" /> : null}
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} useFlexGap>
-              <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
-                {vehicles.length ? 'Add Another Vehicle' : 'Add Your First Vehicle'}
-              </Button>
+              {canManage ? (
+                <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
+                  {vehicles.length ? 'Add Another Vehicle' : 'Add Your First Vehicle'}
+                </Button>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No vehicles are assigned to you in this fleet yet. The fleet owner assigns them under Fleet.
+                </Typography>
+              )}
               {archivedVehicles.length ? (
                 <Button variant="outlined" onClick={() => setShowArchived(true)}>
                   Show Archived Vehicles

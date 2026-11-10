@@ -8,15 +8,13 @@ from fastapi.responses import Response
 
 try:
     from backend.activity import get_activity_export_rows, get_activity_feed
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import get_vehicle_column
     from backend.vehicle_events import sync_expense_to_vehicle_event, sync_session_to_vehicle_event
     from backend.vehicle_rules import validate_session_for_vehicle, validate_vehicle_reference
 except ModuleNotFoundError:
     from activity import get_activity_export_rows, get_activity_feed
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import get_vehicle_column
     from vehicle_events import sync_expense_to_vehicle_event, sync_session_to_vehicle_event
     from vehicle_rules import validate_session_for_vehicle, validate_vehicle_reference
@@ -221,7 +219,7 @@ def get_activity(
     activity_type: Optional[str] = Query(None),
     vehicle_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     return get_activity_feed(
@@ -235,7 +233,7 @@ def export_activity_csv(
     activity_type: Optional[str] = Query(None),
     vehicle_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     rows = get_activity_export_rows(db, user_id, activity_type=activity_type, vehicle_id=vehicle_id, search=search)
@@ -280,9 +278,10 @@ def export_activity_csv(
 @router.post('/activity/import-csv')
 async def import_activity_csv(
     file: UploadFile = File(...),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     _subscription=Depends(require_write_access),
     db=Depends(get_tenant_db),
+    _manager=Depends(require_fleet_manager),
 ):
     filename = (file.filename or '').lower()
     if not filename.endswith('.csv'):

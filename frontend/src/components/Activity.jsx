@@ -83,7 +83,7 @@ const getTypeChipSx = (theme, activityType) => {
 function Activity() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user } = useAuth();
+  const { user, canManage } = useAuth();
   const fmt = useMemo(() => createFormatters(user), [user]);
 
   // The tab lives in the URL so it can be linked to (the dashboard alerts point
@@ -403,13 +403,15 @@ function Activity() {
                   </ToggleButton>
                 </ToggleButtonGroup>
                 <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleCsvFilePicked} />
-                <Tooltip title="Import a CSV exported from Mileage">
-                  <span>
-                    <IconButton onClick={() => fileInputRef.current?.click()} disabled={csvImporting}>
-                      <UploadFileIcon />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                {canManage ? (
+                  <Tooltip title="Import a CSV exported from Mileage">
+                    <span>
+                      <IconButton onClick={() => fileInputRef.current?.click()} disabled={csvImporting}>
+                        <UploadFileIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                ) : null}
                 <Tooltip title="Export what you see as CSV">
                   <IconButton onClick={handleExportCsv}><DownloadIcon /></IconButton>
                 </Tooltip>
@@ -473,6 +475,8 @@ function Activity() {
                         </Stack>
                         <Typography variant="body2" color="text.secondary">
                           {new Date(item.occurred_at).toLocaleDateString()} · {item.vehicle_name}
+                          {/* Named only when a fleet member entered it, never for the owner. */}
+                          {item.recorded_by_name ? ` · by ${item.recorded_by_name}` : ''}
                           {item.description ? ` · ${item.description}` : ''}
                         </Typography>
                       </Box>

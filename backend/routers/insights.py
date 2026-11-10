@@ -5,8 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from backend.activity import get_activity_feed
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import column_exists, get_db, get_vehicle_column
     from backend.forecast import build_forecast
     from backend.fuel_comparison import annotate_trend, resolve_basis
@@ -14,8 +13,7 @@ try:
     from backend.routers.vehicles import has_archive_support
 except ModuleNotFoundError:
     from activity import get_activity_feed
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import column_exists, get_db, get_vehicle_column
     from forecast import build_forecast
     from fuel_comparison import annotate_trend, resolve_basis
@@ -187,7 +185,7 @@ def _fetch_window(cur, user_id: str, db, start: date, end: date, include_expense
 
 
 @router.get('/dashboard/stats')
-def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_dashboard_stats(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     # No backfill here: every write path (sessions, expenses, CSV import) already
     # syncs into vehicle_events, and dev_seed.sql inserts them directly. Running it
     # per request cost a full scan of both legacy tables on every read.
@@ -961,7 +959,7 @@ def _fetch_monthly_stats(cur, user_id: str, **kwargs) -> list[dict]:
 def get_analytics_summary(
     range_key: str = Query('all', alias='range'),
     vehicle_ids: list[int] | None = Query(None, alias='vehicles'),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     """Fleet-wide analytics for a range, optionally narrowed to chosen vehicles.
@@ -1274,7 +1272,7 @@ def get_analytics_summary(
 def get_vehicle_analytics_drilldown(
     vehicle_id: int,
     range_key: str = Query('all', alias='range'),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     cur = db.cursor()
@@ -1425,7 +1423,7 @@ def get_vehicle_analytics_drilldown(
     }
 
 @router.get('/analytics/forecast')
-def get_cost_forecast(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_cost_forecast(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     """Projected running cost for the rest of the calendar year.
 
     Separate from /analytics/summary because it answers a different question and has a
@@ -1451,7 +1449,7 @@ MAP_GRID_DECIMALS = 3
 def get_analytics_map(
     range_key: str = Query('all', alias='range'),
     vehicle_ids: list[int] | None = Query(None, alias='vehicles'),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     """Where the account charges and fuels: one point per named place, plus pooled

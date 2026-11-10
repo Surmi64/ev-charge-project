@@ -25,6 +25,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 import OdometerWordmark from './OdometerWordmark';
 import { getSettingsItems } from '../utils/settingsNav';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 
 const Sidebar = ({ toggleTheme, themeMode }) => {
   const navigate = useNavigate();
@@ -84,6 +85,8 @@ const Sidebar = ({ toggleTheme, themeMode }) => {
           <OdometerWordmark />
         </Box>
       </Box>
+
+      <WorkspaceSwitcher />
 
       <Box sx={{ flexGrow: 1, border: '1px solid', borderColor: 'divider', borderRadius: 4, bgcolor: 'background.paper', p: 1.5 }}>
       <Typography className="industrial-kicker" sx={{ px: 1.25, pt: 0.5 }}>Navigation</Typography>

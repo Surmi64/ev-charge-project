@@ -13,7 +13,7 @@ try:
     from backend.account_lifecycle import send_mail
     from backend.auth_rate_limit import enforce
     from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db
+    from backend.billing import get_own_db
     from backend.db import get_db
     from backend.notifications import link
     from backend.routers.admin import require_admin_user
@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     from account_lifecycle import send_mail
     from auth_rate_limit import enforce
     from auth_utils import get_current_user_id
-    from billing import get_tenant_db
+    from billing import get_own_db
     from db import get_db
     from notifications import link
     from routers.admin import require_admin_user
@@ -81,7 +81,7 @@ def _messages_by_feedback(cur, feedback_ids: list[int]) -> dict[int, list]:
 
 @router.post('/feedback', status_code=201)
 def submit_feedback(payload: FeedbackCreate, request: Request, user_id: str = Depends(get_current_user_id),
-                    db=Depends(get_tenant_db)):
+                    db=Depends(get_own_db)):
     if payload.kind not in KINDS:
         raise HTTPException(status_code=400, detail='Kind must be idea, bug or complaint')
     enforce(db, f'feedback:user:{user_id}', SUBMISSIONS_PER_DAY, 86400,
@@ -133,7 +133,7 @@ def submit_feedback(payload: FeedbackCreate, request: Request, user_id: str = De
 
 
 @router.get('/feedback')
-def my_feedback(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def my_feedback(user_id: str = Depends(get_current_user_id), db=Depends(get_own_db)):
     cur = db.cursor()
     cur.execute('SELECT * FROM feedback WHERE user_id = %s ORDER BY created_at DESC;', (user_id,))
     rows = cur.fetchall()
@@ -143,7 +143,7 @@ def my_feedback(user_id: str = Depends(get_current_user_id), db=Depends(get_tena
 
 @router.post('/feedback/{feedback_id}/messages', status_code=201)
 def reply_as_user(feedback_id: int, payload: FeedbackReply, user_id: str = Depends(get_current_user_id),
-                  db=Depends(get_tenant_db)):
+                  db=Depends(get_own_db)):
     enforce(db, f'feedback-reply:user:{user_id}', 30, 86400, 'Too many replies today. Try again tomorrow.')
     cur = db.cursor()
     cur.execute('SELECT id, subject, kind FROM feedback WHERE id = %s AND user_id = %s;', (feedback_id, user_id))

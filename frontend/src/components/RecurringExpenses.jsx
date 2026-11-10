@@ -67,7 +67,8 @@ const dueLabel = (days) => {
 
 const RecurringExpenses = () => {
   const theme = useTheme();
-  const { user } = useAuth();
+  // Recurring costs are the fleet's to plan; a driver sees them but does not change them.
+  const { user, canManage } = useAuth();
   const fmt = useMemo(() => createFormatters(user), [user]);
   const [reminders, setReminders] = useState([]);
   const [vehicles, setVehicles] = useState([]);
@@ -187,9 +188,11 @@ const RecurringExpenses = () => {
         <Typography variant="body2" color="text.secondary">
           Costs that come back on a schedule. Logging one records the expense and moves the date forward.
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
-          Add reminder
-        </Button>
+        {canManage ? (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
+            Add reminder
+          </Button>
+        ) : null}
       </Stack>
 
       {sorted.length === 0 ? (
@@ -198,7 +201,7 @@ const RecurringExpenses = () => {
           <Typography color="text.secondary" sx={{ mb: 2 }}>
             Add insurance, road tax or a service interval and Mileage will remind you.
           </Typography>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>Add reminder</Button>
+          {canManage ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>Add reminder</Button> : null}
         </Card>
       ) : (
         <Stack spacing={1.5}>
@@ -226,6 +229,7 @@ const RecurringExpenses = () => {
                     {reminder.is_active ? (
                       <Chip size="small" color={due.color} variant="outlined" label={due.text} />
                     ) : null}
+                    {canManage ? (<>
                     <Tooltip title={reminder.is_active ? 'Log this cost now' : 'Resume to log'}>
                       <span>
                         <IconButton size="small" color="success" disabled={!reminder.is_active || busy} onClick={() => act(reminder, 'log')}>
@@ -254,6 +258,7 @@ const RecurringExpenses = () => {
                         </IconButton>
                       </span>
                     </Tooltip>
+                    </>) : null}
                   </Stack>
                 </Stack>
               </Card>

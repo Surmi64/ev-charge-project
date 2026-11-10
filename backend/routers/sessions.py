@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 try:
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import column_exists, get_vehicle_column
     from backend.notifications import enqueue_session_notifications
     from backend.places import resolve_place
@@ -10,8 +9,7 @@ try:
     from backend.vehicle_events import delete_vehicle_event_by_legacy, sync_session_to_vehicle_event
     from backend.vehicle_rules import validate_session_for_vehicle
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import column_exists, get_vehicle_column
     from notifications import enqueue_session_notifications
     from places import resolve_place
@@ -50,7 +48,7 @@ def _location_write(db, user_id, session):
 
 
 @router.get('/charging_sessions', response_model=list[dict])
-def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_charging_sessions(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     cur.execute(
@@ -94,7 +92,7 @@ def get_charging_sessions(user_id: str = Depends(get_current_user_id), db=Depend
 
 
 @router.patch('/charging_sessions/{session_id}')
-def update_charging_session(session_id: str, session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def update_charging_session(session_id: str, session: ChargingSessionCreate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     try:
@@ -151,7 +149,7 @@ def update_charging_session(session_id: str, session: ChargingSessionCreate, use
 
 
 @router.post('/charging_sessions', status_code=201)
-def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     try:
@@ -190,7 +188,7 @@ def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(
 
 
 @router.delete('/charging_sessions/{session_id}')
-def delete_charging_session(session_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def delete_charging_session(session_id: int, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM charging_sessions WHERE id = %s AND user_id = %s;', (session_id, user_id))

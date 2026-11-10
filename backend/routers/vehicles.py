@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import column_exists, get_vehicle_column, table_exists
     from backend.schemas import VehicleCreate, VehicleUpdate
     from backend.vehicle_rules import normalize_vehicle_payload
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import column_exists, get_vehicle_column, table_exists
     from schemas import VehicleCreate, VehicleUpdate
     from vehicle_rules import normalize_vehicle_payload
@@ -64,7 +62,7 @@ def ensure_active_default_vehicle(cur, db, user_id: str):
 @router.get('/vehicles', response_model=list[dict])
 def get_vehicles(
     include_archived: bool = Query(False),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     cur = db.cursor()
@@ -106,7 +104,7 @@ def get_vehicles(
 
 
 @router.post('/vehicles', status_code=201)
-def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     heat_pump_supported = has_heat_pump_support(db)
     try:
@@ -155,7 +153,7 @@ def create_vehicle(vehicle: VehicleCreate, user_id: str = Depends(get_current_us
 
 
 @router.patch('/vehicles/{vehicle_id}')
-def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def update_vehicle(vehicle_id: int, vehicle: VehicleUpdate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     select_fields = 'id, is_default, is_archived' if has_archive_support(db) else 'id, is_default'
     cur.execute(f'SELECT {select_fields} FROM vehicles WHERE id = %s AND user_id = %s;', (vehicle_id, user_id))
@@ -230,7 +228,7 @@ def count_vehicle_history(cur, db, vehicle_id: int, user_id: str) -> dict:
 
 
 @router.get('/vehicles/{vehicle_id}/history-count')
-def get_vehicle_history_count(vehicle_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_vehicle_history_count(vehicle_id: int, user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     """What a permanent delete of this vehicle would destroy.
 
     A read, so it is deliberately not gated on write access -- a lapsed account may
@@ -254,9 +252,10 @@ def get_vehicle_history_count(vehicle_id: int, user_id: str = Depends(get_curren
 def delete_vehicle(
     vehicle_id: int,
     purge: bool = Query(False),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     _subscription=Depends(require_write_access),
     db=Depends(get_tenant_db),
+    _manager=Depends(require_fleet_manager),
 ):
     """Delete a vehicle, archiving it instead if it still carries history.
 

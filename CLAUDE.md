@@ -45,7 +45,7 @@ alembic revision -m "describe change"
 
 ### Testing
 
-There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and `scripts/qa-accounts.py` goes deeper: two throwaway accounts, tenant isolation between them, then verification, sessions, export, feedback, scheduled deletion and the login limit, cleaning up after itself. Both need registration open and the dev containers. CI only builds images. If you add tests you are setting the convention.
+There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and `scripts/qa-accounts.py` goes deeper: two throwaway accounts, tenant isolation between them, then verification, sessions, export, feedback, scheduled deletion and the login limit, cleaning up after itself. `scripts/qa-fleet.py` does the same for fleets: owner, manager, driver and outsider, what each can reach, invitations, reassignment and removal. Both need registration open and the dev containers. CI only builds images. If you add tests you are setting the convention.
 
 For UI work, a headless Chromium is available at `/snap/bin/chromium` and `puppeteer-core` drives it. Layout shift, loading flicker and unit formatting have all been verified that way — lint and build catch none of them.
 
@@ -53,9 +53,10 @@ For UI work, a headless Chromium is available at `/snap/bin/chromium` and `puppe
 
 ### Tenant isolation is enforced by the database
 
-Row level security on `vehicles`, `charging_sessions`, `expenses`, `vehicle_events`, `recurring_expense_reminders` and `subscriptions`. Policies match on `current_setting('app.user_id')`, which `billing.get_tenant_db` sets once per request.
+Row level security on `vehicles`, `charging_sessions`, `expenses`, `vehicle_events`, `recurring_expense_reminders` and `subscriptions`. Policies match on `current_setting('app.user_id')`, which `billing.get_workspace` (behind `get_tenant_db`) sets once per request.
 
-- **Every endpoint touching user data must depend on `get_tenant_db`, not `get_db`.** The policy uses `NULLIF(...)`, so a connection that never sets the tenant matches nothing and returns zero rows rather than everyone's.
+- **Every endpoint touching user data must depend on `get_tenant_db`, not `get_db`, and take its id from `get_tenant_user_id`, not `get_current_user_id`.** The policy uses `NULLIF(...)`, so a connection that never sets the tenant matches nothing and returns zero rows rather than everyone's. The two ids differ inside a fleet (below) — filtering by the caller's own id there finds nothing, or inserts rows the policy refuses.
+- What belongs to the person rather than to the records — profile, export, feedback, fleet membership — uses `get_own_db`, which ignores the workspace header.
 - **The app connects as `DB_APP_USER` (`mileage_app`), which must not be a superuser and must not hold `BYPASSRLS`.** Either one silently disables every policy. `DB_USER` stays the owner and is used for migrations only.
 - Admin endpoints deliberately use `get_db`, so `app.user_id` is unset and an admin cannot read another account's records even with a query that omits a `WHERE` clause. `subscriptions` carries an extra `app.admin` escape because plan state is what user management needs.
 
@@ -79,6 +80,16 @@ The backfill used to run on every read, which cost a full scan of both tables pe
 
 No payment provider is connected. The `provider*` columns exist for one, and an admin activates plans through `PATCH /admin/subscriptions/{user_id}`.
 
+### Fleets
+
+A fleet is an ordinary account (the owner) that other accounts are let into, as `manager` (every vehicle) or `driver` (the vehicles in `fleet_members.vehicle_ids`). The client sends `X-Mileage-Workspace: <owner id>`; `get_workspace` checks the membership on every request and binds `app.user_id` to the **owner**, so every tenant policy and every existing query works unchanged. For a driver it also sets `app.vehicle_ids`, which the five vehicle-bound policies honour — a driver's restriction lives in the database, not in each query. Unset or empty means all vehicles, which is what owners, managers and the notification worker get.
+
+- `app.actor_id` is always the signed-in person. `charging_sessions.recorded_by` / `expenses.recorded_by` default from it, so no insert names the author; Records shows "by X" when it is not the owner.
+- `require_fleet_manager` keeps drivers out of shaping the fleet: vehicles create/edit/delete, recurring costs, notification recipients, place management, CSV import. The UI hides the same controls via `canManage`.
+- The owner's plan gates writes (`require_write_access` reads the tenant's subscription); the email-confirmation check stays the caller's own. `/billing/me` answers for the workspace, flagged `managed_by_fleet_owner`.
+- Only the owner manages membership (`routers/fleet.py`). Invitations are hashed tokens, valid 14 days; the link is also returned to the owner so a fleet can be set up before mail works. A link can be accepted by any signed-in account (the owner chose whom to send it to); an in-app invitation needs the account's confirmed address to match. A stale header answers 403 with `X-Mileage-Workspace-Invalid`, and `api.js` drops it.
+- Frontend: `AuthContext` exposes `workspace`, `switchWorkspace` (stores the id and reloads, since every page holds data for the old workspace), `canManage`, and overlays the owner's currency/unit/calculation settings onto `user`; `account` is the person's own row. Onboarding never shows inside a fleet.
+
 ### Client address, headers and the service worker
 
 The API is only reached through the frontend's nginx, which resolves the real client from `X-Forwarded-For` (trusting only private and Tailscale hops, `set_real_ip_from` in `frontend/nginx.conf`) and passes it as `X-Real-IP`. `get_client_ip` reads that. Using `request.client.host` instead gives the proxy container's address for everyone — every per-IP limit then throttles all users at once.
@@ -101,7 +112,7 @@ Cost per 100 km converts by *dividing* by the distance factor, since 100 miles i
 
 - `main.py` — app assembly, CORS, request-ID middleware, structured JSON exception handlers
 - `billing.py` — subscription state, `get_tenant_db`, `require_write_access`
-- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights` (including `/analytics/map`), `places` (including the bulk `/places/unassigned` + `/places/assign`), `notifications`, `feedback` (user side and the `/admin/feedback` inbox), `health`
+- `routers/` — `auth`, `admin`, `billing`, `fleet`, `vehicles`, `expenses`, `sessions`, `activity`, `insights` (including `/analytics/map`), `places` (including the bulk `/places/unassigned` + `/places/assign`), `notifications`, `feedback` (user side and the `/admin/feedback` inbox), `health`
 - `account_lifecycle.py` — account mail (verification, reset, notices) queued as `system` outbox rows, and the hourly `maintenance` the notification worker runs: purge accounts whose 30-day deletion grace has passed (complaints survive with `feedback.user_id` set NULL), trial reminders 7 and 1 days out (once each, keyed in `users.lifecycle_emails`), and pruning — security log after a year, rate-limit rows after a day. Bump `TERMS_VERSION` there whenever the terms text in `LegalPage.jsx` changes
 - `auth_rate_limit.py` — attempt limits stored in `rate_limit_events`, not process memory, so a restart no longer resets them
 - `config.py` — env-driven; refuses to start outside development without a non-default `JWT_SECRET_KEY`, and keeps the superseded GarageOS default on the rejection list

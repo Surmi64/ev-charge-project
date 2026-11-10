@@ -6,15 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import psycopg2
 
 try:
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import get_vehicle_column
     from backend.places import MATCH_RADIUS_M, find_nearest_place
     from backend.providers import SITE_SHAPE, _is_provenance
     from backend.schemas import PlaceAssignRequest
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import get_vehicle_column
     from places import MATCH_RADIUS_M, find_nearest_place
     from providers import SITE_SHAPE, _is_provenance
@@ -34,7 +32,7 @@ def _serialize(row) -> dict:
 
 
 @router.get('/places')
-def list_places(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def list_places(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     """The account's named places, most visited first.
 
     Feeds the name field's suggestions, so someone who is out of signal — or who never
@@ -63,7 +61,7 @@ def list_places(user_id: str = Depends(get_current_user_id), db=Depends(get_tena
 def nearby_place(
     latitude: float = Query(..., ge=-90, le=90),
     longitude: float = Query(..., ge=-180, le=180),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     db=Depends(get_tenant_db),
 ):
     """The known place a coordinate falls in, if any.
@@ -82,9 +80,10 @@ def nearby_place(
 def rename_place(
     place_id: int,
     name: str = Query(..., min_length=1, max_length=120),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     _subscription=Depends(require_write_access),
     db=Depends(get_tenant_db),
+    _manager=Depends(require_fleet_manager),
 ):
     """Rename a place everywhere at once.
 
@@ -132,9 +131,10 @@ def rename_place(
 @router.delete('/places/{place_id}')
 def delete_place(
     place_id: int,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     _subscription=Depends(require_write_access),
     db=Depends(get_tenant_db),
+    _manager=Depends(require_fleet_manager),
 ):
     """Forget a place. The records stay; they simply stop being grouped under a name.
 
@@ -208,7 +208,7 @@ def _site_label(source: str | None, notes: str | None) -> str:
 
 
 @router.get('/places/unassigned')
-def unassigned_records(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def unassigned_records(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     """Charging and fueling records with no place and no coordinate, grouped by the
     words that name their site, largest group first.
 
@@ -288,8 +288,9 @@ def unassigned_records(user_id: str = Depends(get_current_user_id), db=Depends(g
 @router.post('/places/assign')
 def assign_place(
     payload: PlaceAssignRequest,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_tenant_user_id),
     _subscription=Depends(require_write_access),
+    _manager=Depends(require_fleet_manager),
     db=Depends(get_tenant_db),
 ):
     """File records under a place: an existing one by id, or a new one by name and position.

@@ -31,7 +31,7 @@ const reducedMotion = () => typeof window !== 'undefined'
  */
 const ChargingMap = ({ range, vehicleFilter, providerColors }) => {
   const theme = useTheme();
-  const { user } = useAuth();
+  const { user, canManage } = useAuth();
   const fmt = useMemo(() => createFormatters(user), [user]);
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -217,7 +217,7 @@ const ChargingMap = ({ range, vehicleFilter, providerColors }) => {
                 ? `All ${coverage.records} records have a location.`
                 : `${coverage.located} of ${coverage.records} records have a location.`}
             </Typography>
-            {coverage.located < coverage.records ? (
+            {canManage && coverage.located < coverage.records ? (
               <Button size="small" onClick={() => setAssignOpen(true)}>Add places to older records</Button>
             ) : null}
           </Stack>

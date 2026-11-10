@@ -57,6 +57,18 @@ def get_activity_feed(
         ', ve.latitude, ve.longitude, ve.place_name::text AS place_name'
         if column_exists(db, 'vehicle_events', 'place_name') else ''
     )
+    # Who entered it, named only when that was someone other than the account itself —
+    # a fleet member. A one-person account never shows it.
+    author_select, author_join = '', ''
+    if column_exists(db, 'charging_sessions', 'recorded_by'):
+        author_select = (
+            ", CASE WHEN author.id IS DISTINCT FROM ve.user_id THEN author.username END::text AS recorded_by_name"
+        )
+        author_join = (
+            " LEFT JOIN charging_sessions author_cs ON ve.legacy_source = 'charging_session' AND author_cs.id = ve.legacy_id"
+            " LEFT JOIN expenses author_ex ON ve.legacy_source = 'expense' AND author_ex.id = ve.legacy_id"
+            " LEFT JOIN users author ON author.id = COALESCE(author_cs.recorded_by, author_ex.recorded_by)"
+        )
     params.append(limit)
     params.append(offset)
 
@@ -89,8 +101,10 @@ def get_activity_feed(
                 ve.battery_level_start,
                 ve.battery_level_end
                 {location_select}
+                {author_select}
             FROM vehicle_events ve
             LEFT JOIN vehicles v ON v.id = ve.vehicle_id AND v.user_id = ve.user_id
+            {author_join}
             WHERE ve.user_id = %s
         ) combined_activity
         {where_clause}
@@ -129,6 +143,7 @@ def get_activity_feed(
             'fuel_liters': float(row['fuel_liters']) if row.get('fuel_liters') is not None else None,
             'battery_level_start': row.get('battery_level_start'),
             'battery_level_end': row.get('battery_level_end'),
+            'recorded_by_name': row.get('recorded_by_name'),
         }
         for row in cur.fetchall()
     ]

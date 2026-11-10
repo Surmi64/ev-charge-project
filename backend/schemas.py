@@ -195,3 +195,26 @@ class FeedbackReply(BaseModel):
 
 class FeedbackStatusUpdate(BaseModel):
     status: str
+
+
+# Fleets. A driver sees only `vehicle_ids`; a manager sees every vehicle, so the list
+# is ignored for one.
+FLEET_ROLE_PATTERN = '^(manager|driver)$'
+
+
+class FleetInvitationCreate(BaseModel):
+    email: EmailStr
+    role: str = Field(pattern=FLEET_ROLE_PATTERN)
+    vehicle_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+class FleetMemberUpdate(BaseModel):
+    role: Optional[str] = Field(default=None, pattern=FLEET_ROLE_PATTERN)
+    vehicle_ids: Optional[list[int]] = Field(default=None, max_length=500)
+
+
+class FleetInvitationAccept(BaseModel):
+    # A link carries the token; an invitation shown inside the app is accepted by id,
+    # which needs the signed-in account's confirmed address to be the invited one.
+    token: Optional[str] = Field(default=None, max_length=200)
+    invitation_id: Optional[int] = None

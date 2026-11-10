@@ -1,21 +1,22 @@
 from fastapi import APIRouter, Depends
 
 try:
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import ensure_subscription, get_tenant_db, serialize_subscription
+    from backend.billing import Workspace, ensure_subscription, get_tenant_db, get_workspace, serialize_subscription
     from backend.config import PLAN_PRICES, TRIAL_DAYS
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id
-    from billing import ensure_subscription, get_tenant_db, serialize_subscription
+    from billing import Workspace, ensure_subscription, get_tenant_db, get_workspace, serialize_subscription
     from config import PLAN_PRICES, TRIAL_DAYS
 
 router = APIRouter(tags=['billing'])
 
 
 @router.get('/billing/me')
-def get_my_subscription(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
-    """The caller's own subscription. Row level security keeps this to one row."""
-    return serialize_subscription(ensure_subscription(db, user_id))
+def get_my_subscription(workspace: Workspace = Depends(get_workspace), db=Depends(get_tenant_db)):
+    """The plan behind the active workspace: the caller's own, or in a fleet the owner's,
+    since that is the one that decides whether anything can be recorded there."""
+    data = serialize_subscription(ensure_subscription(db, workspace.tenant_id))
+    data['managed_by_fleet_owner'] = not workspace.is_own
+    return data
 
 
 @router.get('/billing/plans')

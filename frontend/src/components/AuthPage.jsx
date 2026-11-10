@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, FormHelperText, Link, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
 import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 import AuthLayout from './AuthLayout';
 import PasswordField from './PasswordField';
@@ -44,6 +44,12 @@ const AuthPage = ({ mode = 'login' }) => {
   const [serverErrors, setServerErrors] = useState({});
   const { login, authenticated } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Where to go once signed in — a fleet invitation sends people here and wants them
+  // back. Only a same-site path: '//host' would be a redirect to another site.
+  const nextParam = searchParams.get('next') || '';
+  const next = nextParam.startsWith('/') && !nextParam.startsWith('//') ? nextParam : '/';
+  const nextQuery = next === '/' ? '' : `?next=${encodeURIComponent(next)}`;
   const { registration_open: registrationOpen, loaded: configLoaded } = useSiteConfig();
 
   const usernameRef = useRef(null);
@@ -61,8 +67,8 @@ const AuthPage = ({ mode = 'login' }) => {
   }, [mode]);
 
   useEffect(() => {
-    if (authenticated) navigate('/');
-  }, [authenticated, navigate]);
+    if (authenticated) navigate(next);
+  }, [authenticated, navigate, next]);
 
   // Field-level messages. Registration holds the password to the server's policy;
   // signing in only checks that something was typed, because an existing password
@@ -98,8 +104,8 @@ const AuthPage = ({ mode = 'login' }) => {
     setFormError('');
     setServerErrors({});
     setValues((previous) => ({ ...previous, password: '' }));
-    navigate(value === REGISTER ? '/register' : '/login');
-  }, [navigate]);
+    navigate(`${value === REGISTER ? '/register' : '/login'}${nextQuery}`);
+  }, [navigate, nextQuery]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -142,7 +148,7 @@ const AuthPage = ({ mode = 'login' }) => {
         login(session.user, session.access_token, session.refresh_token);
         toast.success(`Welcome back, ${session.user.username}.`);
       }
-      navigate('/');
+      navigate(next);
     } catch (error) {
       toast.error(error.message);
       if (error.field && ['username', 'email'].includes(error.field)) {

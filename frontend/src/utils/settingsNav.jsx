@@ -3,6 +3,7 @@ import {
   CreditCard as BillingIcon,
   AdminPanelSettings as AdminIcon,
   Feedback as FeedbackIcon,
+  Groups as FleetIcon,
 } from '@mui/icons-material';
 
 /**
@@ -23,6 +24,12 @@ export const getSettingsItems = (user) => {
       description: 'Plan, trial status and billing',
       icon: <BillingIcon />,
       path: '/billing',
+    },
+    {
+      text: 'Fleet',
+      description: 'Drivers and managers on your vehicles',
+      icon: <FleetIcon />,
+      path: '/fleet',
     },
     {
       text: 'Feedback',

@@ -4,15 +4,13 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 try:
-    from backend.auth_utils import get_current_user_id
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import table_exists
     from backend.schemas import ExpenseCreate, ExpenseUpdate, RecurringExpenseCreate, RecurringExpenseLogRequest, RecurringExpenseUpdate
     from backend.vehicle_rules import validate_vehicle_reference
     from backend.vehicle_events import delete_vehicle_event_by_legacy, sync_expense_to_vehicle_event
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id
-    from billing import get_tenant_db, require_write_access
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import table_exists
     from schemas import ExpenseCreate, ExpenseUpdate, RecurringExpenseCreate, RecurringExpenseLogRequest, RecurringExpenseUpdate
     from vehicle_rules import validate_vehicle_reference
@@ -86,14 +84,14 @@ def serialize_reminder(reminder: dict) -> dict:
 
 
 @router.get('/expenses', response_model=list[dict])
-def get_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_expenses(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute('SELECT * FROM expenses WHERE user_id = %s ORDER BY date DESC;', (user_id,))
     return cur.fetchall()
 
 
 @router.get('/recurring-expenses', response_model=list[dict])
-def get_recurring_expenses(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def get_recurring_expenses(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute(
         """
@@ -108,7 +106,7 @@ def get_recurring_expenses(user_id: str = Depends(get_current_user_id), db=Depen
 
 
 @router.post('/expenses', status_code=201)
-def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         if expense.vehicle_id is not None:
@@ -131,7 +129,7 @@ def create_expense(expense: ExpenseCreate, user_id: str = Depends(get_current_us
 
 
 @router.post('/recurring-expenses', status_code=201)
-def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     try:
         payload = validate_recurring_payload(reminder.model_dump())
@@ -171,7 +169,7 @@ def create_recurring_expense(reminder: RecurringExpenseCreate, user_id: str = De
 
 
 @router.patch('/expenses/{expense_id}')
-def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     cur.execute('SELECT id, vehicle_id FROM expenses WHERE id = %s AND user_id = %s;', (expense_id, user_id))
     existing_expense = cur.fetchone()
@@ -210,7 +208,7 @@ def update_expense(expense_id: int, expense: ExpenseUpdate, user_id: str = Depen
 
 
 @router.patch('/recurring-expenses/{reminder_id}')
-def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     cur.execute('SELECT id, vehicle_id FROM recurring_expense_reminders WHERE id = %s AND user_id = %s;', (reminder_id, user_id))
     existing = cur.fetchone()
@@ -255,7 +253,7 @@ def update_recurring_expense(reminder_id: int, reminder: RecurringExpenseUpdate,
 
 
 @router.post('/recurring-expenses/{reminder_id}/log-expense', status_code=201)
-def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     cur.execute(
         'SELECT * FROM recurring_expense_reminders WHERE id = %s AND user_id = %s AND is_active = TRUE;',
@@ -309,7 +307,7 @@ def log_recurring_expense(reminder_id: int, payload: RecurringExpenseLogRequest,
 
 
 @router.delete('/expenses/{expense_id}')
-def delete_expense(expense_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def delete_expense(expense_id: int, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM expenses WHERE id = %s AND user_id = %s;', (expense_id, user_id))
@@ -327,7 +325,7 @@ def delete_expense(expense_id: int, user_id: str = Depends(get_current_user_id),
 
 
 @router.delete('/recurring-expenses/{reminder_id}')
-def delete_recurring_expense(reminder_id: int, user_id: str = Depends(get_current_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def delete_recurring_expense(reminder_id: int, user_id: str = Depends(get_tenant_user_id), _subscription=Depends(require_write_access), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     try:
         cur.execute('DELETE FROM recurring_expense_reminders WHERE id = %s AND user_id = %s;', (reminder_id, user_id))

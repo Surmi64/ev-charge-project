@@ -16,6 +16,9 @@ import MobileNav from './components/MobileNav';
 import SubscriptionBanner from './components/SubscriptionBanner';
 import AccountBanner from './components/AccountBanner';
 import FeedbackPage from './components/FeedbackPage';
+import FleetPage from './components/FleetPage';
+import FleetJoinPage from './components/FleetJoinPage';
+import WorkspaceSwitcher from './components/WorkspaceSwitcher';
 import LegalPage from './components/LegalPage';
 import VerifyEmailPage from './components/VerifyEmailPage';
 import Onboarding from './components/Onboarding';
@@ -41,7 +44,7 @@ import {
 
 
 const PrivateRoute = ({ children }) => {
-  const { authenticated, loading, user } = useAuth();
+  const { authenticated, loading, user, inFleetWorkspace } = useAuth();
 
   if (loading) {
     return <Box display="flex" justifyContent="center" alignItems="center" height="100dvh"><CircularProgress /></Box>;
@@ -50,8 +53,9 @@ const PrivateRoute = ({ children }) => {
   if (!authenticated) return <Navigate to="/login" replace />;
 
   // Shown once per account, on any route. Skipping sets the same flag as finishing,
-  // so this never comes back.
-  if (user && !user.onboarded_at) return <Onboarding />;
+  // so this never comes back. Never inside someone else's fleet: the questions are
+  // about this person's own account, and the fleet's units are the owner's anyway.
+  if (user && !user.onboarded_at && !inFleetWorkspace) return <Onboarding />;
 
   return children;
 };
@@ -442,6 +446,8 @@ function App() {
                 <Route path="/forgot-password" element={<PasswordRecoveryPage mode="forgot" />} />
                 <Route path="/reset-password" element={<PasswordRecoveryPage mode="reset" />} />
                 <Route path="/verify-email" element={<VerifyEmailPage />} />
+                {/* Public: the invitee may not have an account yet. */}
+                <Route path="/fleet/join" element={<FleetJoinPage />} />
                 <Route path="/terms" element={<LegalPage document="terms" />} />
                 <Route path="/privacy" element={<LegalPage document="privacy" />} />
                 <Route path="/imprint" element={<LegalPage document="imprint" />} />
@@ -468,6 +474,11 @@ function App() {
                         }}
                       >
                         <Box sx={{ width: '100%', maxWidth: '1320px', mx: 'auto' }}>
+                          {/* The sidebar carries the switcher on desktop; a phone has no
+                              sidebar, so it sits above the page there. */}
+                          <Box sx={{ display: { xs: 'block', sm: 'none' }, mb: 2 }}>
+                            <WorkspaceSwitcher dense />
+                          </Box>
                           <AccountBanner />
                           <SubscriptionBanner />
                           <Routes>
@@ -478,6 +489,7 @@ function App() {
                             <Route path="/account" element={<Profile />} />
                             <Route path="/billing" element={<Billing />} />
                             <Route path="/feedback" element={<FeedbackPage />} />
+                            <Route path="/fleet" element={<FleetPage />} />
                             <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
               {/* The old bookmark keeps working, landing on the tab it used to be. */}
               <Route path="/admin/users" element={<Navigate to="/admin?tab=users" replace />} />

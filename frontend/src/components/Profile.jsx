@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Paper, Typography, TextField, Button, CircularProgress, Chip, Stack, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Tab, Tabs, useTheme } from '@mui/material';
+import { Alert, Box, Paper, Typography, TextField, Button, CircularProgress, Chip, Stack, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Tab, Tabs, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
@@ -249,7 +249,17 @@ const SecurityLog = ({ entries, loading }) => {
 };
 
 const Profile = () => {
-    const { token, user, updateUser, loading: authLoading } = useAuth();
+    const { token, user, account, updateUser, loading: authLoading, inFleetWorkspace, workspace, switchWorkspace } = useAuth();
+    // In a fleet, units, currency and the calculation settings are the owner's — they
+    // belong to the records — so those cards make way for a note rather than editing
+    // this person's own row, which would change nothing on screen.
+    const fleetNotice = inFleetWorkspace ? (
+        <Alert severity="info" variant="outlined"
+            action={<Button color="inherit" size="small" onClick={() => switchWorkspace(null)}>My account</Button>}>
+            In {workspace.owner_name}&apos;s fleet these are the owner&apos;s settings. Switch to your own account to
+            change yours.
+        </Alert>
+    ) : null;
     const navigate = useNavigate();
     const settingsItems = getSettingsItems(user);
     const [searchParams, setSearchParams] = useSearchParams();
@@ -336,7 +346,7 @@ const Profile = () => {
 
                     {tab === 'profile' ? (
                         <Stack spacing={3}>
-                            <ProfileForm user={user} updateUser={updateUser} />
+                            <ProfileForm user={account || user} updateUser={updateUser} />
                             <PasswordForm onChanged={fetchSecurityLog} />
                             <AccountDataSettings />
                         </Stack>
@@ -345,11 +355,12 @@ const Profile = () => {
                     {tab === 'display' ? (
                         <Stack spacing={3}>
                             <AppearanceSettings />
-                            <UnitSettings />
+                            {fleetNotice || <UnitSettings />}
                         </Stack>
                     ) : null}
 
-                    {tab === 'calculations' ? (
+                    {tab === 'calculations' && fleetNotice ? fleetNotice : null}
+                    {tab === 'calculations' && !fleetNotice ? (
                         <Stack spacing={3}>
                             <Typography variant="body2" color="text.secondary">
                                 What Analytics assumes when it projects the year, measures cost per distance and draws the petrol comparison.
@@ -361,7 +372,7 @@ const Profile = () => {
                         </Stack>
                     ) : null}
 
-                    {tab === 'notifications' ? <NotificationSettings /> : null}
+                    {tab === 'notifications' ? (fleetNotice || <NotificationSettings />) : null}
 
                     {tab === 'security' ? (
                         <Stack spacing={3}>

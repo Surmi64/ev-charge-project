@@ -6,14 +6,14 @@ from fastapi.responses import HTMLResponse
 import psycopg2
 
 try:
-    from backend.auth_utils import get_current_user_id, hash_token
-    from backend.billing import get_tenant_db, require_write_access
+    from backend.auth_utils import hash_token
+    from backend.billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from backend.db import get_db
     from backend.notifications import enqueue_confirmation, enqueue_test, new_token
     from backend.schemas import NotificationRecipientCreate, NotificationRecipientUpdate
 except ModuleNotFoundError:
-    from auth_utils import get_current_user_id, hash_token
-    from billing import get_tenant_db, require_write_access
+    from auth_utils import hash_token
+    from billing import get_tenant_db, get_tenant_user_id, require_fleet_manager, require_write_access
     from db import get_db
     from notifications import enqueue_confirmation, enqueue_test, new_token
     from schemas import NotificationRecipientCreate, NotificationRecipientUpdate
@@ -74,15 +74,17 @@ def _get(cur, user_id, recipient_id):
 
 
 @router.get('/notifications/recipients')
-def list_recipients(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def list_recipients(user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     cur = db.cursor()
     cur.execute('SELECT * FROM notification_recipients WHERE user_id = %s ORDER BY created_at, id;', (user_id,))
     return [_serialize(row) for row in cur.fetchall()]
 
 
 @router.post('/notifications/recipients', status_code=201)
-def add_recipient(payload: NotificationRecipientCreate, user_id: str = Depends(get_current_user_id),
-                  _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def add_recipient(payload: NotificationRecipientCreate, user_id: str = Depends(get_tenant_user_id),
+                  _subscription=Depends(require_write_access), db=Depends(get_tenant_db),
+                  _manager=Depends(require_fleet_manager),
+):
     cur = db.cursor()
     mode = _check_mode(payload.mode)
     vehicle_ids = _check_vehicles(cur, user_id, payload.vehicle_ids)
@@ -118,8 +120,10 @@ def add_recipient(payload: NotificationRecipientCreate, user_id: str = Depends(g
 
 
 @router.patch('/notifications/recipients/{recipient_id}')
-def update_recipient(recipient_id: int, payload: NotificationRecipientUpdate, user_id: str = Depends(get_current_user_id),
-                     _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def update_recipient(recipient_id: int, payload: NotificationRecipientUpdate, user_id: str = Depends(get_tenant_user_id),
+                     _subscription=Depends(require_write_access), db=Depends(get_tenant_db),
+                     _manager=Depends(require_fleet_manager),
+):
     cur = db.cursor()
     _get(cur, user_id, recipient_id)
     changes = payload.model_dump(exclude_unset=True)
@@ -145,7 +149,7 @@ def update_recipient(recipient_id: int, payload: NotificationRecipientUpdate, us
 
 
 @router.delete('/notifications/recipients/{recipient_id}')
-def delete_recipient(recipient_id: int, user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+def delete_recipient(recipient_id: int, user_id: str = Depends(get_tenant_user_id), db=Depends(get_tenant_db), _manager=Depends(require_fleet_manager)):
     # Not gated on the subscription: stopping mail must always be possible.
     cur = db.cursor()
     cur.execute('DELETE FROM notification_recipients WHERE id = %s AND user_id = %s;', (recipient_id, user_id))
@@ -156,8 +160,10 @@ def delete_recipient(recipient_id: int, user_id: str = Depends(get_current_user_
 
 
 @router.post('/notifications/recipients/{recipient_id}/resend')
-def resend_confirmation(recipient_id: int, user_id: str = Depends(get_current_user_id),
-                        _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def resend_confirmation(recipient_id: int, user_id: str = Depends(get_tenant_user_id),
+                        _subscription=Depends(require_write_access), db=Depends(get_tenant_db),
+                        _manager=Depends(require_fleet_manager),
+):
     cur = db.cursor()
     row = _get(cur, user_id, recipient_id)
     if row['confirmed_at'] is not None:
@@ -180,8 +186,10 @@ def resend_confirmation(recipient_id: int, user_id: str = Depends(get_current_us
 
 
 @router.post('/notifications/recipients/{recipient_id}/test')
-def send_test(recipient_id: int, user_id: str = Depends(get_current_user_id),
-              _subscription=Depends(require_write_access), db=Depends(get_tenant_db)):
+def send_test(recipient_id: int, user_id: str = Depends(get_tenant_user_id),
+              _subscription=Depends(require_write_access), db=Depends(get_tenant_db),
+              _manager=Depends(require_fleet_manager),
+):
     cur = db.cursor()
     row = _get(cur, user_id, recipient_id)
     if row['confirmed_at'] is None:
