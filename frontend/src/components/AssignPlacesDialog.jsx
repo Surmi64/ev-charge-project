@@ -100,7 +100,7 @@ const AssignPlacesDialog = ({ open, onClose }) => {
   const [choice, setChoice] = useState({});
   // A new place being drawn, per group: several can be open at once without sharing a pin.
   const [drafts, setDrafts] = useState({});
-  const [busyKey, setBusyKey] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [changed, setChanged] = useState(0);
 
   useEffect(() => {
@@ -137,37 +137,68 @@ const AssignPlacesDialog = ({ open, onClose }) => {
     }
   };
 
-  const assign = async (group) => {
+  const draftFor = (group) => drafts[group.key] || { name: '', position: null };
+
+  // What a group's current choice would file it under, or null if it is not finished:
+  // nothing picked, or a new place still missing its name or its pin.
+  const targetFor = (group) => {
     const picked = choice[group.key];
-    const body = { session_ids: group.session_ids };
-    const draft = drafts[group.key] || { name: '', position: null };
-    if (picked === NEW_PLACE) {
-      if (!draft.name.trim() || !draft.position) {
-        toast.error('Name the place and click where it is on the map');
-        return;
-      }
-      Object.assign(body, { name: draft.name.trim(), ...draft.position });
-    } else {
-      body.place_id = Number(picked);
-    }
-    setBusyKey(group.key);
+    if (!picked) return null;
+    if (picked !== NEW_PLACE) return { place_id: Number(picked) };
+    const draft = draftFor(group);
+    if (!draft.name.trim() || !draft.position) return null;
+    return { name: draft.name.trim(), ...draft.position };
+  };
+
+  const ready = (groups || []).filter((group) => targetFor(group));
+  const unfinished = (groups || []).filter((group) => choice[group.key] === NEW_PLACE && !targetFor(group));
+
+  // One save for everything filled in. The rows used to carry a button each, and closing
+  // the dialog after picking places quietly threw the picks away.
+  const saveAll = async () => {
+    setSaving(true);
+    let filed = 0;
+    const done = new Set();
+    // Two groups pinned as new places under the same name are one place: the first
+    // creates it, the rest are filed under it rather than refused as a duplicate.
+    const created = new Map();
     try {
-      const res = await apiFetch('/api/places/assign', { method: 'POST', body: JSON.stringify(body) });
-      if (!res.ok) throw new Error(await readError(res, 'Could not file these records'));
-      const result = await res.json();
-      if (picked === NEW_PLACE) {
-        setPlaces((current) => [...current, {
-          id: result.place.id, name: result.place.name, ...draft.position, visit_count: result.assigned,
-        }]);
+      for (const group of ready) {
+        const target = targetFor(group);
+        const reuse = target.name ? created.get(target.name.toLowerCase()) : null;
+        const body = { session_ids: group.session_ids, ...(reuse ? { place_id: reuse } : target) };
+        const res = await apiFetch('/api/places/assign', { method: 'POST', body: JSON.stringify(body) });
+        if (!res.ok) {
+          toast.error(`${group.label || 'No description'}: ${await readError(res, 'could not be filed')}`);
+          continue;
+        }
+        const result = await res.json();
+        if (target.name && !reuse) {
+          created.set(target.name.toLowerCase(), result.place.id);
+          setPlaces((current) => [...current, {
+            id: result.place.id, name: result.place.name,
+            latitude: target.latitude, longitude: target.longitude, visit_count: result.assigned,
+          }]);
+          setChoice((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [
+            key, value === NEW_PLACE && (drafts[key]?.name || '').trim().toLowerCase() === target.name.toLowerCase()
+              ? String(result.place.id) : value,
+          ])));
+        }
+        filed += result.assigned;
+        done.add(group.key);
       }
-      setGroups((current) => current.filter((item) => item.key !== group.key));
-      setChanged((count) => count + result.assigned);
-      toast.success(`${result.assigned} record${result.assigned === 1 ? '' : 's'} filed under ${result.place.name}`);
-    } catch (error) {
-      toast.error(error.message);
     } finally {
-      setBusyKey(null);
+      setSaving(false);
     }
+    if (done.size) {
+      setGroups((current) => current.filter((group) => !done.has(group.key)));
+      toast.success(`${filed} record${filed === 1 ? '' : 's'} filed in ${done.size} group${done.size === 1 ? '' : 's'}`);
+    }
+    const total = changed + filed;
+    setChanged(total);
+    // Closed only when everything asked for went through; a failure or an unfinished pin
+    // keeps the dialog open on exactly what is left.
+    if (done.size === ready.length && !unfinished.length) onClose(total);
   };
 
   const describe = (group) => {
@@ -186,8 +217,9 @@ const AssignPlacesDialog = ({ open, onClose }) => {
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           These records have no location. They are grouped by what they say about where
-          they happened; file a group under one of your places, or pin a new one on the map.
-          Where the words match a place you already have, it is picked for you — check it.
+          they happened; pick one of your places for a group, or pin a new one on the map,
+          then save. Where the words match a place you already have, it is picked for you —
+          check it, or set it back to nothing to leave that group alone.
         </Typography>
 
         {groups === null ? (
@@ -202,7 +234,7 @@ const AssignPlacesDialog = ({ open, onClose }) => {
           {(groups || []).map((group) => {
             const picked = choice[group.key] ?? '';
             const isNew = picked === NEW_PLACE;
-            const draft = drafts[group.key] || { name: '', position: null };
+            const draft = draftFor(group);
             const setDraft = (update) => setDrafts((current) => ({
               ...current, [group.key]: { ...draft, ...current[group.key], ...update },
             }));
@@ -217,11 +249,12 @@ const AssignPlacesDialog = ({ open, onClose }) => {
                   </Box>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <TextField
-                      select size="small" label="Place" sx={{ minWidth: 220 }}
+                      select size="small" label="Place" sx={{ minWidth: 240 }}
+                      disabled={saving}
                       value={picked}
                       onChange={(event) => select(group, event.target.value)}
                     >
-                      <MenuItem value="" disabled>Choose a place</MenuItem>
+                      <MenuItem value=""><em>Leave for now</em></MenuItem>
                       {places.map((place) => (
                         <MenuItem key={place.id} value={String(place.id)}>
                           {place.name}{group.suggested_place_id === place.id ? ' (suggested)' : ''}
@@ -229,14 +262,6 @@ const AssignPlacesDialog = ({ open, onClose }) => {
                       ))}
                       <MenuItem value={NEW_PLACE}>New place…</MenuItem>
                     </TextField>
-                    <Button
-                      variant="contained" size="small"
-                      disabled={!picked || busyKey === group.key || (isNew && (!draft.position || !draft.name.trim()))}
-                      onClick={() => assign(group)}
-                      sx={{ minHeight: 40, flexShrink: 0 }}
-                    >
-                      {busyKey === group.key ? 'Filing…' : 'File'}
-                    </Button>
                   </Stack>
                 </Stack>
 
@@ -263,8 +288,18 @@ const AssignPlacesDialog = ({ open, onClose }) => {
           })}
         </Stack>
       </DialogContent>
-      <DialogActions>
-        <Button onClick={() => onClose(changed)}>Done</Button>
+      <DialogActions sx={{ px: 3, py: 1.5, gap: 1, flexWrap: 'wrap' }}>
+        {unfinished.length ? (
+          <Typography variant="caption" color="warning.main" sx={{ mr: 'auto' }}>
+            {unfinished.length} new place{unfinished.length === 1 ? ' still needs' : 's still need'} a name and a pin
+          </Typography>
+        ) : null}
+        <Button onClick={() => onClose(changed)} disabled={saving}>{ready.length ? 'Cancel' : 'Close'}</Button>
+        <Button variant="contained" onClick={saveAll} disabled={saving || !ready.length}>
+          {saving ? 'Saving…' : ready.length
+            ? `Save ${ready.length} group${ready.length === 1 ? '' : 's'}`
+            : 'Save'}
+        </Button>
       </DialogActions>
     </Dialog>
   );
