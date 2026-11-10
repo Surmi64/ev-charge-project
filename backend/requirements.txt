@@ -2,12 +2,14 @@ click==8.2.1
 colorama==0.4.6
 alembic==1.16.4
 SQLAlchemy==2.0.43
-fastapi
-uvicorn[standard]
-pydantic[email]
-python-jose[cryptography]
-passlib[bcrypt]
+# Pinned to what the image was built and tested with: unpinned, every rebuild could
+# install a different framework release. Update deliberately, one at a time.
+fastapi==0.162.2
+uvicorn[standard]==0.54.0
+pydantic[email]==2.14.3
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 psycopg2-binary==2.9.10
-python-multipart
-tzdata
+python-multipart==0.0.33
+tzdata==2026.6

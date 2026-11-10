@@ -45,7 +45,7 @@ alembic revision -m "describe change"
 
 ### Testing
 
-There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and CI only builds images. If you add tests you are setting the convention.
+There is no test suite. `scripts/smoke-dev.sh` is the closest thing to one, and `scripts/qa-accounts.py` goes deeper: two throwaway accounts, tenant isolation between them, then verification, sessions, export, feedback, scheduled deletion and the login limit, cleaning up after itself. Both need registration open and the dev containers. CI only builds images. If you add tests you are setting the convention.
 
 For UI work, a headless Chromium is available at `/snap/bin/chromium` and `puppeteer-core` drives it. Layout shift, loading flicker and unit formatting have all been verified that way — lint and build catch none of them.
 
@@ -79,6 +79,16 @@ The backfill used to run on every read, which cost a full scan of both tables pe
 
 No payment provider is connected. The `provider*` columns exist for one, and an admin activates plans through `PATCH /admin/subscriptions/{user_id}`.
 
+### Client address, headers and the service worker
+
+The API is only reached through the frontend's nginx, which resolves the real client from `X-Forwarded-For` (trusting only private and Tailscale hops, `set_real_ip_from` in `frontend/nginx.conf`) and passes it as `X-Real-IP`. `get_client_ip` reads that. Using `request.client.host` instead gives the proxy container's address for everyone — every per-IP limit then throttles all users at once.
+
+`frontend/nginx-security-headers.conf` carries the CSP and friends, included per location because nginx drops inherited `add_header` as soon as a location sets its own. A new third-party origin (tile provider, payment overlay) has to be added to the CSP. `public/sw.js` handles same-origin GETs only: a request the worker re-fetches is held to the *worker's* `connect-src 'self'`, which blocked every map tile and web font when it intercepted everything.
+
+### Accounts
+
+Sign-up records `terms_accepted_at`/`terms_version` and queues a confirmation link. `require_email_verification` (site setting, off by default) makes `require_write_access` refuse unconfirmed accounts with 403 — leave it off until outgoing mail works, or nobody new can record anything. Access tokens carry `sid`, the refresh session they belong to, which is how the session list marks "this device". Self-service deletion revokes every session and waits 30 days; signing in shows a banner that cancels it.
+
 ### Units and currency
 
 Distance is stored in kilometres and volume in litres; the client converts for display, which is why `_km` and `_kwh` suffixes on API fields are accurate and worth keeping.
@@ -91,7 +101,9 @@ Cost per 100 km converts by *dividing* by the distance factor, since 100 miles i
 
 - `main.py` — app assembly, CORS, request-ID middleware, structured JSON exception handlers
 - `billing.py` — subscription state, `get_tenant_db`, `require_write_access`
-- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights` (including `/analytics/map`), `places`, `notifications`, `health`
+- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights` (including `/analytics/map`), `places` (including the bulk `/places/unassigned` + `/places/assign`), `notifications`, `feedback` (user side and the `/admin/feedback` inbox), `health`
+- `account_lifecycle.py` — account mail (verification, reset, notices) queued as `system` outbox rows, and the hourly `maintenance` the notification worker runs: purge accounts whose 30-day deletion grace has passed (complaints survive with `feedback.user_id` set NULL), trial reminders 7 and 1 days out (once each, keyed in `users.lifecycle_emails`), and pruning — security log after a year, rate-limit rows after a day. Bump `TERMS_VERSION` there whenever the terms text in `LegalPage.jsx` changes
+- `auth_rate_limit.py` — attempt limits stored in `rate_limit_events`, not process memory, so a restart no longer resets them
 - `config.py` — env-driven; refuses to start outside development without a non-default `JWT_SECRET_KEY`, and keeps the superseded GarageOS default on the rejection list
 - `forecast.py` — year-end cost projection; de-seasonalises history before re-applying a seasonal curve, so the same curve must be used in both directions
 - `climate.py` — monthly consumption multipliers derived from per-zone temperature normals and a heat-pump COP model. The curves are normalised to mean 1 and carry only the *shape* of the year; the level always comes from the account's own cost per km. `scripts/calibrate-climate.py` checks the temperate zone still reproduces the published fleet penalties and exits non-zero if it drifts

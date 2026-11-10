@@ -27,7 +27,7 @@ echo "[4/6] Registering smoke user"
 REGISTER_STATUS="$(curl -sS -o /tmp/smoke-register.json -w '%{http_code}' \
   -X POST http://localhost:4646/auth/register \
   -H 'Content-Type: application/json' \
-  -d "{\"username\":\"$USERNAME\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")"
+  -d "{\"username\":\"$USERNAME\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"terms_accepted\":true}")"
 
 if [ "$REGISTER_STATUS" = "403" ]; then
   echo "Registration is closed on this instance (site setting), so the sign-up path"

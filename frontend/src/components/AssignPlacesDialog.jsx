@@ -101,6 +101,7 @@ const AssignPlacesDialog = ({ open, onClose }) => {
   // A new place being drawn, per group: several can be open at once without sharing a pin.
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
+  const [filedCount, setFiledCount] = useState(null);
   const [changed, setChanged] = useState(0);
 
   useEffect(() => {
@@ -110,7 +111,10 @@ const AssignPlacesDialog = ({ open, onClose }) => {
     Promise.all([apiFetch('/api/places/unassigned'), apiFetch('/api/places')])
       .then(async ([groupRes, placeRes]) => {
         const loadedGroups = groupRes.ok ? await groupRes.json() : [];
-        setPlaces(placeRes.ok ? await placeRes.json() : []);
+        const loadedPlaces = placeRes.ok ? await placeRes.json() : [];
+        setPlaces(loadedPlaces);
+        // visit_count on the places list counts the records filed there.
+        setFiledCount(loadedPlaces.reduce((sum, place) => sum + Number(place.visit_count || 0), 0));
         setGroups(loadedGroups);
         setChoice(Object.fromEntries(loadedGroups.map((group) => [
           group.key, group.suggested_place_id ? String(group.suggested_place_id) : '',
@@ -221,6 +225,12 @@ const AssignPlacesDialog = ({ open, onClose }) => {
           then save. Where the words match a place you already have, it is picked for you —
           check it, or set it back to nothing to leave that group alone.
         </Typography>
+        {filedCount != null ? (
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            {filedCount} record{filedCount === 1 ? ' is' : 's are'} already filed under a place. Filed
+            groups leave this list; their records are on the map.
+          </Typography>
+        ) : null}
 
         {groups === null ? (
           <Stack alignItems="center" sx={{ py: 6 }}><CircularProgress size={28} /></Stack>

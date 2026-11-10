@@ -15,6 +15,7 @@ import html
 import logging
 import secrets
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -41,6 +42,8 @@ except ModuleNotFoundError:
 logger = logging.getLogger('mileage.notifications')
 
 POLL_SECONDS = 30
+# Account purges, trial reminders and log pruning: hourly is plenty for any of them.
+MAINTENANCE_SECONDS = 3600
 BATCH_SIZE = 20
 MAX_ATTEMPTS = 5
 # An instant notice that could not go out for this long is no longer news; it is dropped
@@ -177,6 +180,21 @@ def enqueue_session_notifications(db, user_id, session_id: int) -> None:
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
         cur.execute('ROLLBACK TO SAVEPOINT notify_session;')
         log_event(logger, 'error', 'notification_enqueue_failed', user_id=user_id, session_id=session_id, error=str(exc))
+
+
+def enqueue_system_email(cur, user_id, to: str, subject: str, text: str, html_body: str | None = None) -> None:
+    """Queue one account mail — verification, reset, a notice — to a plain address.
+
+    Account mail is queued from requests that have no tenant (sign-up, password reset)
+    or an admin's (a feedback answer), so the row goes in through the outbox's
+    `app.notifications` escape — set for this transaction only, so nothing else the
+    request does afterwards inherits it.
+    """
+    cur.execute("SELECT set_config('app.notifications', 'on', true);")
+    cur.execute(
+        "INSERT INTO notification_outbox (user_id, kind, payload) VALUES (%s, 'system', %s);",
+        (user_id, Json({'to': to, 'subject': subject, 'text': text, 'html': html_body})),
+    )
 
 
 def enqueue_confirmation(cur, user_id, recipient_id: int, token: str, account_name: str) -> None:
@@ -326,6 +344,9 @@ def _connect():
     )
     cur = conn.cursor()
     cur.execute("SET app.notifications = 'on';")
+    # The maintenance pass reads plan state for trial reminders; subscriptions take the
+    # same admin escape the user-management pages use.
+    cur.execute("SET app.admin = 'on';")
     conn.commit()
     return conn
 
@@ -340,7 +361,7 @@ def process_outbox(conn) -> int:
         SELECT o.id, o.kind, o.payload, o.attempts, o.created_at,
                r.email, r.confirmed_at, r.unsubscribe_token
         FROM notification_outbox o
-        JOIN notification_recipients r ON r.id = o.recipient_id
+        LEFT JOIN notification_recipients r ON r.id = o.recipient_id
         WHERE o.status = 'pending' AND o.send_after <= NOW()
         ORDER BY o.id
         LIMIT %s
@@ -352,6 +373,16 @@ def process_outbox(conn) -> int:
     now = datetime.now(timezone.utc)
     for row in rows:
         try:
+            # Account mail (verification, reset, notices) carries its own address and is
+            # never subject to a subscriber's confirmation or unsubscribe.
+            if row['kind'] == 'system':
+                payload = row['payload']
+                send_email(payload['to'], payload['subject'], payload['text'], payload.get('html'))
+                cur.execute(
+                    "UPDATE notification_outbox SET status = 'sent', sent_at = NOW(), attempts = attempts + 1 WHERE id = %s;",
+                    (row['id'],),
+                )
+                continue
             # A recipient can be unconfirmed again only by being re-added; everything but
             # the confirmation itself waits for a yes.
             if row['kind'] != 'confirm' and row['confirmed_at'] is None:
@@ -470,11 +501,15 @@ def run_worker(stop: threading.Event) -> None:
         log_event(logger, 'warning', 'notifications_mail_unconfigured',
                   detail='SMTP_HOST is not set; notifications are queued but not sent')
     conn = None
+    next_maintenance = 0.0
     while not stop.is_set():
         try:
             if conn is None or conn.closed:
                 conn = _connect()
             build_digests(conn)
+            if time.monotonic() >= next_maintenance:
+                run_maintenance(conn)
+                next_maintenance = time.monotonic() + MAINTENANCE_SECONDS
             while process_outbox(conn) == BATCH_SIZE and not stop.is_set():
                 pass
         except Exception as exc:  # noqa: BLE001 - the worker must outlive any one failure
@@ -488,6 +523,15 @@ def run_worker(stop: threading.Event) -> None:
         stop.wait(POLL_SECONDS)
     if conn is not None:
         conn.close()
+
+
+def run_maintenance(conn) -> None:
+    # Imported here: account_lifecycle builds on this module's queue.
+    try:
+        from backend.account_lifecycle import maintenance
+    except ModuleNotFoundError:
+        from account_lifecycle import maintenance
+    maintenance(conn)
 
 
 def start_worker() -> threading.Event:

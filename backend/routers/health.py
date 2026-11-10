@@ -77,8 +77,9 @@ def public_site_config(db=Depends(get_db)):
     except Exception:
         # Never let a settings problem break the login screen; the safe answer is the
         # ordinary one.
-        return {'registration_open': True, 'maintenance_notice': ''}
+        return {'registration_open': True, 'maintenance_notice': '', 'require_email_verification': False}
     return {
         'registration_open': settings['registration_open'],
         'maintenance_notice': settings['maintenance_notice'],
+        'require_email_verification': settings['require_email_verification'],
     }

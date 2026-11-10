@@ -135,6 +135,29 @@ const SiteSettings = () => {
           }
           sx={{ alignItems: 'flex-start', ml: 0, gap: 1.5 }}
         />
+
+        <FormControlLabel
+          control={
+            <Switch
+              checked={Boolean(draft.require_email_verification)}
+              onChange={(event) => setValue('require_email_verification')(event.target.checked)}
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2" fontWeight={600}>
+                Require a confirmed email
+                {inherited('require_email_verification') ? <Chip size="small" label="default" variant="outlined" sx={{ ml: 1, height: 19 }} /> : null}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {draft.require_email_verification
+                  ? 'Accounts must click the link in their confirmation email before recording anything.'
+                  : 'Confirmation links are sent, but nothing waits for them. Turn on only once outgoing mail works.'}
+              </Typography>
+            </Box>
+          }
+          sx={{ alignItems: 'flex-start', ml: 0, mt: 2, gap: 1.5 }}
+        />
       </Paper>
 
       <Paper sx={{ p: 2.5, borderRadius: 4 }}>

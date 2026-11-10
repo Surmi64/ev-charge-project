@@ -210,7 +210,11 @@ def _site_label(source: str | None, notes: str | None) -> str:
 @router.get('/places/unassigned')
 def unassigned_records(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
     """Charging and fueling records with no place and no coordinate, grouped by the
-    words that name their site, largest group first."""
+    words that name their site, largest group first.
+
+    Archived vehicles are left out, as on the map whose gaps this fills: the count on
+    the map card and the records offered here have to be the same records.
+    """
     cur = db.cursor()
     vehicle_column = get_vehicle_column(db)
     cur.execute(
@@ -219,6 +223,7 @@ def unassigned_records(user_id: str = Depends(get_current_user_id), db=Depends(g
         FROM charging_sessions cs
         JOIN vehicles v ON v.id = cs.{vehicle_column}
         WHERE cs.user_id = %s AND cs.place_id IS NULL AND cs.latitude IS NULL
+          AND COALESCE(v.is_archived, FALSE) = FALSE
         ORDER BY cs.start_time;
         """,
         (user_id,),

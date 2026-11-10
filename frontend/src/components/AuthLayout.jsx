@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Box, Card, Container, Typography, useTheme } from '@mui/material';
+import { Alert, Box, Card, Container, Link, Stack, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
   BoltOutlined as EnergyIcon,
@@ -162,6 +162,12 @@ const AuthLayout = ({ kicker, title, subtitle, children, footer }) => {
             {children}
 
             {footer ? <Box sx={{ mt: 3 }}>{footer}</Box> : null}
+
+            <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3 }}>
+              {[['/terms', 'Terms'], ['/privacy', 'Privacy'], ['/imprint', 'Imprint']].map(([href, label]) => (
+                <Link key={href} href={href} underline="hover" variant="caption" color="text.secondary">{label}</Link>
+              ))}
+            </Stack>
           </Card>
         </Box>
       </Container>

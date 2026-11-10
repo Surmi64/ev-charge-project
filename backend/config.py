@@ -29,7 +29,9 @@ if not IS_DEVELOPMENT and SECRET_KEY in {'super-secret-key-123', 'garageos-dev-i
 	raise RuntimeError('JWT_SECRET_KEY must not use an insecure default value outside development')
 
 ALGORITHM = 'HS256'
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '720'))
+# Short-lived: a stolen access token is only good until the next refresh, and the
+# client refreshes transparently (utils/api.js), so nobody notices the turnover.
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '30'))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', '30'))
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = int(os.environ.get('PASSWORD_RESET_TOKEN_EXPIRE_MINUTES', '30'))
 

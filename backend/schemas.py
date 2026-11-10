@@ -7,6 +7,8 @@ class UserRegister(BaseModel):
     username: str
     email: EmailStr
     password: str
+    # Must be true: the account is created under the terms and the privacy notice.
+    terms_accepted: bool = False
 
 
 class UserLogin(BaseModel):
@@ -168,3 +170,28 @@ class PlaceAssignRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=120)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class AccountDeletionRequest(BaseModel):
+    password: str
+
+
+class FeedbackCreate(BaseModel):
+    kind: str
+    subject: str = Field(..., min_length=3, max_length=200)
+    body: str = Field(..., min_length=10, max_length=5000)
+    # Where it was sent from and what the app knew then: page, app version, the last
+    # failed request's id. Filled in by the client, never shown back as instructions.
+    context: Optional[dict] = None
+
+
+class FeedbackReply(BaseModel):
+    body: str = Field(..., min_length=1, max_length=5000)
+
+
+class FeedbackStatusUpdate(BaseModel):
+    status: str

@@ -177,4 +177,14 @@ def require_write_access(user_id: str = Depends(get_current_user_id), db=Depends
             status_code=402,
             detail='Your subscription has ended. Your data stays readable and exportable, but new entries need an active plan.',
         )
+    # 403, not 402: nothing to pay, one link to click. Admins are exempt, as from the plan.
+    if not subscription.get('exempt') and get_site_setting(db, 'require_email_verification'):
+        cur = db.cursor()
+        cur.execute('SELECT email_verified_at FROM users WHERE id = %s;', (user_id,))
+        row = cur.fetchone()
+        if row and row.get('email_verified_at') is None:
+            raise HTTPException(
+                status_code=403,
+                detail='Confirm your email address first — the link is in your inbox, and the banner above can send a new one.',
+            )
     return subscription

@@ -7,6 +7,8 @@ import ClimateSettings from './ClimateSettings';
 import FuelComparisonSettings from './FuelComparisonSettings';
 import CostPerKmSettings from './CostPerKmSettings';
 import NotificationSettings from './NotificationSettings';
+import AccountDataSettings from './AccountDataSettings';
+import SessionsCard from './SessionsCard';
 import AppearanceSettings from './AppearanceSettings';
 import PasswordField from './PasswordField';
 import { toast } from 'sonner';
@@ -64,7 +66,9 @@ const ProfileForm = ({ user, updateUser }) => {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || 'Could not save your profile');
-            updateUser({ username: username.trim(), email: email.trim() });
+            updateUser(emailChanged
+                ? { username: username.trim(), email: email.trim(), email_verified_at: null }
+                : { username: username.trim() });
             setCurrentPassword('');
             toast.success('Profile saved');
         } catch (error) {
@@ -85,6 +89,7 @@ const ProfileForm = ({ user, updateUser }) => {
                     onChange={(event) => setUsername(event.target.value)} margin="normal" autoComplete="username" />
                 <TextField fullWidth label="Email" type="email" value={email}
                     onChange={(event) => setEmail(event.target.value)} margin="normal" autoComplete="email" />
+                {!emailChanged ? <EmailStatus user={user} /> : null}
                 {emailChanged ? (
                     <Box sx={{ mt: 2 }}>
                         <PasswordField
@@ -100,6 +105,33 @@ const ProfileForm = ({ user, updateUser }) => {
                 </Button>
             </form>
         </Paper>
+    );
+};
+
+// Whether the sign-in address is proven, with a way to prove it. Quiet when it is.
+const EmailStatus = ({ user }) => {
+    const [sending, setSending] = useState(false);
+    if (user.email_verified_at) {
+        return <Chip size="small" color="success" variant="outlined" label="Confirmed" sx={{ mt: 0.5 }} />;
+    }
+    const resend = async () => {
+        setSending(true);
+        try {
+            const res = await apiFetch('/api/auth/verify-email/resend', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Could not send the link');
+            toast.success(data.message);
+        } catch (error) {
+            toast.error(error.message);
+        } finally {
+            setSending(false);
+        }
+    };
+    return (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+            <Chip size="small" color="warning" variant="outlined" label="Not confirmed" />
+            <Button size="small" onClick={resend} disabled={sending}>Send confirmation link</Button>
+        </Stack>
     );
 };
 
@@ -306,6 +338,7 @@ const Profile = () => {
                         <Stack spacing={3}>
                             <ProfileForm user={user} updateUser={updateUser} />
                             <PasswordForm onChanged={fetchSecurityLog} />
+                            <AccountDataSettings />
                         </Stack>
                     ) : null}
 
@@ -331,7 +364,10 @@ const Profile = () => {
                     {tab === 'notifications' ? <NotificationSettings /> : null}
 
                     {tab === 'security' ? (
-                        <SecurityLog entries={securityLog} loading={securityLoading} />
+                        <Stack spacing={3}>
+                            <SessionsCard />
+                            <SecurityLog entries={securityLog} loading={securityLoading} />
+                        </Stack>
                     ) : null}
                 </Box>
             </Stack>

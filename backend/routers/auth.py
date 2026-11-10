@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -7,10 +9,14 @@ import psycopg2
 from psycopg2.extras import Json
 
 try:
-    from backend.auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
+    from backend.account_lifecycle import (
+        DELETION_GRACE_DAYS, TERMS_VERSION, notify, send_password_reset, start_email_verification,
+    )
+    from backend.auth_rate_limit import check_login_rate_limit, clear_login_failures, enforce, register_login_failure
     from backend.auth_utils import (
         create_access_token,
         create_refresh_token,
+        get_current_session_id,
         get_current_user_id,
         hash_token,
         pwd_context,
@@ -20,15 +26,24 @@ try:
     from backend.config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from backend.db import column_exists, get_db, table_exists
     from backend.site_settings import get_site_settings
-    from backend.schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
+    from backend.billing import get_tenant_db
+    from backend.schemas import (
+        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
+        UserLogin, UserRegister, VerifyEmailRequest,
+    )
 except ModuleNotFoundError:
-    from auth_rate_limit import check_login_rate_limit, clear_login_failures, register_login_failure
+    from account_lifecycle import DELETION_GRACE_DAYS, TERMS_VERSION, notify, send_password_reset, start_email_verification
+    from auth_rate_limit import check_login_rate_limit, clear_login_failures, enforce, register_login_failure
     from climate import ZONES as CLIMATE_ZONES, zone_options
-    from auth_utils import create_access_token, create_refresh_token, get_current_user_id, hash_token, pwd_context, validate_password_strength
+    from auth_utils import create_access_token, create_refresh_token, get_current_session_id, get_current_user_id, hash_token, pwd_context, validate_password_strength
     from config import BOOTSTRAP_ADMIN_EMAIL, CURRENCY_CODES, DEFAULT_THEME_PALETTE, DISTANCE_UNITS, THEME_PALETTES, SUPPORTED_CURRENCIES, VOLUME_UNITS, IS_DEVELOPMENT, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
     from db import column_exists, get_db, table_exists
     from site_settings import get_site_settings
-    from schemas import ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest, UserLogin, UserRegister
+    from billing import get_tenant_db
+    from schemas import (
+        AccountDeletionRequest, ForgotPasswordRequest, LogoutRequest, RefreshTokenRequest, ResetPasswordRequest,
+        UserLogin, UserRegister, VerifyEmailRequest,
+    )
 
 router = APIRouter(tags=['auth'])
 
@@ -36,9 +51,18 @@ ALLOWED_USER_ROLES = {'admin', 'user'}
 
 
 def get_client_ip(request: Request | None):
-    if not request or not request.client:
+    """The caller's address as the frontend proxy saw it.
+
+    The API is only reachable through that proxy (it binds to loopback in deployment),
+    which sets X-Real-IP from the address it resolved itself. The connection's own peer
+    is the proxy container, the same for everyone.
+    """
+    if not request:
         return None
-    return request.client.host
+    forwarded = (request.headers.get('x-real-ip') or '').strip()
+    if forwarded:
+        return forwarded[:64]
+    return request.client.host if request.client else None
 
 
 def ensure_user_roles(db):
@@ -103,7 +127,8 @@ def load_user_profile(db, user_id) -> dict | None:
         columns.append('dismissed_alerts')
     for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone',
                        'reference_consumption_l_100km', 'reference_fuel_price',
-                       'fuel_comparison_enabled', 'cost_per_km_includes_expenses', 'onboarded_at'):
+                       'fuel_comparison_enabled', 'cost_per_km_includes_expenses', 'onboarded_at',
+                       'email_verified_at', 'deletion_scheduled_for'):
         if column_exists(db, 'users', preference):
             columns.append(preference)
 
@@ -130,6 +155,10 @@ def load_user_profile(db, user_id) -> dict | None:
     user.setdefault('fuel_comparison_enabled', True)
     user.setdefault('cost_per_km_includes_expenses', False)
     user['onboarded_at'] = user['onboarded_at'].isoformat() if user.get('onboarded_at') else None
+    # Unverified and "no deletion pending" both read as None; the client shows a banner
+    # for the first only when verification is on, and for the second whenever it is set.
+    for stamp in ('email_verified_at', 'deletion_scheduled_for'):
+        user[stamp] = user[stamp].isoformat() if user.get(stamp) else None
     return user
 
 
@@ -145,21 +174,35 @@ def build_auth_payload(db, user_id, access_token: str, refresh_token: str):
     }
 
 
-def create_session_tokens(db, db_user: dict):
+def create_session_tokens(db, db_user: dict, request: Request | None = None):
     refresh_token, refresh_expires_at = create_refresh_token()
     refresh_hash = hash_token(refresh_token)
-    access_token = create_access_token(data={'sub': str(db_user['id'])})
 
     cur = db.cursor()
-    cur.execute(
-        """
-        INSERT INTO user_sessions (user_id, token_hash, expires_at, last_used_at)
-        VALUES (%s, %s, %s, NOW())
-        RETURNING id;
-        """,
-        (db_user['id'], refresh_hash, refresh_expires_at),
-    )
+    # Where the session was opened, so the account can recognise it in its session
+    # list. Stored only for that list; the security log keeps its own copy of the IP.
+    user_agent = (request.headers.get('user-agent') or '')[:255] if request else None
+    if column_exists(db, 'user_sessions', 'user_agent'):
+        cur.execute(
+            """
+            INSERT INTO user_sessions (user_id, token_hash, expires_at, last_used_at, user_agent, ip_address)
+            VALUES (%s, %s, %s, NOW(), %s, %s)
+            RETURNING id;
+            """,
+            (db_user['id'], refresh_hash, refresh_expires_at, user_agent, get_client_ip(request)),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO user_sessions (user_id, token_hash, expires_at, last_used_at)
+            VALUES (%s, %s, %s, NOW())
+            RETURNING id;
+            """,
+            (db_user['id'], refresh_hash, refresh_expires_at),
+        )
+    session_id = cur.fetchone()['id']
     db.commit()
+    access_token = create_access_token(data={'sub': str(db_user['id']), 'sid': session_id})
     return build_auth_payload(db, db_user['id'], access_token, refresh_token)
 
 
@@ -181,6 +224,11 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
         db.commit()
         raise HTTPException(status_code=403, detail='New registrations are currently closed.')
 
+    # Per address: a sign-up form is the cheapest thing on the site to script.
+    enforce(db, f'register:ip:{get_client_ip(request)}', 10, 3600, 'Too many sign-ups from this network. Try again in an hour.')
+    if not user.terms_accepted:
+        raise HTTPException(status_code=400, detail='Please accept the terms and the privacy notice to create an account.')
+
     validate_password_strength(user.password)
     pwd_hash = pwd_context.hash(user.password)
     cur = db.cursor()
@@ -197,6 +245,12 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
                 (user.username, user.email, pwd_hash, role),
             )
         user_id = cur.fetchone()['id']
+        if column_exists(db, 'users', 'terms_accepted_at'):
+            cur.execute(
+                'UPDATE users SET terms_accepted_at = NOW(), terms_version = %s WHERE id = %s;',
+                (TERMS_VERSION, user_id),
+            )
+            start_email_verification(cur, user_id, user.email)
         db.commit()
         log_auth_event(db, 'register', 'success', user_id=user_id, email=user.email, ip_address=get_client_ip(request))
         db.commit()
@@ -230,25 +284,25 @@ def register(user: UserRegister, request: Request, db=Depends(get_db)):
 
 @router.post('/auth/login')
 def login(user: UserLogin, request: Request, db=Depends(get_db)):
-    check_login_rate_limit(user.email)
+    check_login_rate_limit(db, user.email, get_client_ip(request))
     ensure_user_roles(db)
     cur = db.cursor()
     cur.execute('SELECT * FROM users WHERE LOWER(email) = LOWER(%s);', (user.email,))
     db_user = cur.fetchone()
 
     if not db_user or not pwd_context.verify(user.password, db_user['password_hash']):
-        register_login_failure(user.email)
+        register_login_failure(db, user.email, get_client_ip(request))
         log_auth_event(db, 'login', 'failed', email=user.email, ip_address=get_client_ip(request), details={'reason': 'invalid_credentials'})
         db.commit()
         raise HTTPException(status_code=401, detail='Invalid email or password')
 
-    clear_login_failures(user.email)
+    clear_login_failures(db, user.email)
 
     if column_exists(db, 'users', 'last_login_at'):
         cur.execute('UPDATE users SET last_login_at = NOW() WHERE id = %s;', (db_user['id'],))
         db.commit()
 
-    payload = create_session_tokens(db, db_user)
+    payload = create_session_tokens(db, db_user, request)
     log_auth_event(db, 'login', 'success', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request))
     db.commit()
     return payload
@@ -289,7 +343,7 @@ def refresh_session(payload: RefreshTokenRequest, request: Request, db=Depends(g
         raise HTTPException(status_code=401, detail='Refresh token has expired')
 
     new_refresh_token, refresh_expires_at = create_refresh_token()
-    access_token = create_access_token(data={'sub': str(session['user_id'])})
+    access_token = create_access_token(data={'sub': str(session['user_id']), 'sid': session['id']})
     cur.execute(
         """
         UPDATE user_sessions
@@ -332,6 +386,9 @@ def logout(payload: LogoutRequest, request: Request, db=Depends(get_db)):
 
 @router.post('/auth/forgot-password')
 def forgot_password(payload: ForgotPasswordRequest, request: Request, db=Depends(get_db)):
+    too_many = 'Too many reset requests. Try again later.'
+    enforce(db, f'forgot:email:{str(payload.email).lower()}', 5, 3600, too_many)
+    enforce(db, f'forgot:ip:{get_client_ip(request)}', 20, 3600, too_many)
     cur = db.cursor()
     cur.execute('SELECT id, email FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1;', (payload.email,))
     db_user = cur.fetchone()
@@ -358,6 +415,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db=Depends
         """,
         (db_user['id'], hash_token(reset_token), expires_at),
     )
+    send_password_reset(cur, db_user['id'], db_user['email'], reset_token, PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
     log_auth_event(db, 'forgot_password', 'success', user_id=db_user['id'], email=db_user['email'], ip_address=get_client_ip(request))
     db.commit()
 
@@ -402,6 +460,10 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db=Depends(g
     cur.execute('UPDATE users SET password_hash = %s WHERE id = %s;', (pwd_context.hash(payload.new_password), reset_row['user_id']))
     cur.execute('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = %s;', (reset_row['id'],))
     cur.execute('UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL;', (reset_row['user_id'],))
+    notify(cur, reset_row['user_id'], reset_row['email'], 'Your Mileage password was changed', [
+        'The password of your Mileage account was just reset, and every device was signed out.',
+        'If this was not you, reset it again straight away and reply to this message.',
+    ])
     log_auth_event(db, 'reset_password', 'success', user_id=reset_row['user_id'], email=reset_row['email'], ip_address=get_client_ip(request))
     db.commit()
 
@@ -472,11 +534,13 @@ def update_profile(
 
     # The email is where a reset link goes and the password is the password, so
     # both need proof of the current one. The display name does not.
+    previous_email = None
     if email or new_password:
         if not current_password:
             raise HTTPException(status_code=400, detail='Current password required for this change')
-        cur.execute('SELECT password_hash FROM users WHERE id = %s;', (user_id,))
+        cur.execute('SELECT password_hash, email FROM users WHERE id = %s;', (user_id,))
         user_db = cur.fetchone()
+        previous_email = user_db['email'] if user_db else None
         if not user_db or not pwd_context.verify(current_password, user_db['password_hash']):
             raise HTTPException(status_code=401, detail='Invalid current password')
 
@@ -489,9 +553,13 @@ def update_profile(
     if username:
         updates.append('username = %s')
         values.append(username)
+    email_changed = bool(email) and (previous_email or '').lower() != str(email).lower()
     if email:
         updates.append('email = %s')
         values.append(email)
+        # A new address is unproven until its own link is clicked.
+        if email_changed and column_exists(db, 'users', 'email_verified_at'):
+            updates.append('email_verified_at = NULL')
     if new_password:
         updates.append('password_hash = %s')
         values.append(pwd_context.hash(new_password))
@@ -598,6 +666,17 @@ def update_profile(
                             ('cost_per_km_includes_expenses', cost_per_km_includes_expenses)):
             if value is not None and column_exists(db, 'users', name):
                 changed_fields.append(name)
+        if email_changed and column_exists(db, 'users', 'terms_accepted_at'):
+            start_email_verification(cur, user_id, str(email))
+            notify(cur, user_id, previous_email, 'Your Mileage email address was changed', [
+                f'The sign-in address of your Mileage account was changed to {email}.',
+                'If this was not you, reset your password straight away and reply to this message.',
+            ])
+        elif new_password and previous_email and column_exists(db, 'users', 'terms_accepted_at'):
+            notify(cur, user_id, previous_email, 'Your Mileage password was changed', [
+                'The password of your Mileage account was just changed from the account page.',
+                'If this was not you, reset it straight away and reply to this message.',
+            ])
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})
         db.commit()
         return {'message': 'Profile updated successfully'}
@@ -619,3 +698,203 @@ def get_unit_options():
         # client should not carry its own copy of a list the backend computes from.
         'climate_zones': zone_options(),
     }
+
+
+# --- email verification ----------------------------------------------------------------------
+
+@router.post('/auth/verify-email')
+def verify_email(payload: VerifyEmailRequest, request: Request, db=Depends(get_db)):
+    """Mark an address proven. Only the address the link was issued for: a link sent
+    before the account changed its email again proves nothing about the new one."""
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT t.id, t.user_id, t.email, t.expires_at, t.used_at, u.email AS current_email
+        FROM email_verification_tokens t JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = %s;
+        """,
+        (hash_token(payload.token),),
+    )
+    row = cur.fetchone()
+    invalid = 'This confirmation link is no longer valid. Sign in and send a new one from your account.'
+    if not row or row['used_at'] is not None or is_session_expired(row['expires_at']):
+        raise HTTPException(status_code=400, detail=invalid)
+    if row['email'].lower() != (row['current_email'] or '').lower():
+        cur.execute('UPDATE email_verification_tokens SET used_at = NOW() WHERE id = %s;', (row['id'],))
+        db.commit()
+        raise HTTPException(status_code=400, detail=invalid)
+    cur.execute('UPDATE email_verification_tokens SET used_at = NOW() WHERE id = %s;', (row['id'],))
+    cur.execute('UPDATE users SET email_verified_at = NOW() WHERE id = %s;', (row['user_id'],))
+    log_auth_event(db, 'verify_email', 'success', user_id=row['user_id'], email=row['email'], ip_address=get_client_ip(request))
+    db.commit()
+    return {'message': 'Email address confirmed', 'email': row['email']}
+
+
+@router.post('/auth/verify-email/resend')
+def resend_verification(request: Request, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    enforce(db, f'verify-resend:user:{user_id}', 1, 60, 'A confirmation was just sent. Try again in a minute.')
+    enforce(db, f'verify-resend-day:user:{user_id}', 5, 86400, 'Too many confirmation emails today. Try again tomorrow.')
+    cur = db.cursor()
+    cur.execute('SELECT email, email_verified_at FROM users WHERE id = %s;', (user_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail='User not found')
+    if row['email_verified_at'] is not None:
+        return {'message': 'This address is already confirmed'}
+    start_email_verification(cur, user_id, row['email'])
+    db.commit()
+    return {'message': f"Confirmation sent to {row['email']}"}
+
+
+# --- sessions --------------------------------------------------------------------------------
+
+@router.get('/auth/sessions')
+def list_sessions(user_id: str = Depends(get_current_user_id), session_id: int | None = Depends(get_current_session_id),
+                  db=Depends(get_db)):
+    """Where the account is signed in: every refresh session not revoked or expired."""
+    cur = db.cursor()
+    device = ', user_agent, ip_address' if column_exists(db, 'user_sessions', 'user_agent') else ''
+    cur.execute(
+        f"""
+        SELECT id, created_at, last_used_at, expires_at{device}
+        FROM user_sessions
+        WHERE user_id = %s AND revoked_at IS NULL AND expires_at > NOW()
+        ORDER BY COALESCE(last_used_at, created_at) DESC;
+        """,
+        (user_id,),
+    )
+    return [
+        {
+            'id': row['id'],
+            'created_at': row['created_at'].isoformat() if row.get('created_at') else None,
+            'last_used_at': row['last_used_at'].isoformat() if row.get('last_used_at') else None,
+            'user_agent': row.get('user_agent'),
+            'ip_address': row.get('ip_address'),
+            'current': row['id'] == session_id,
+        }
+        for row in cur.fetchall()
+    ]
+
+
+@router.delete('/auth/sessions/{target_session_id}')
+def revoke_session(target_session_id: int, request: Request, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    cur = db.cursor()
+    cur.execute(
+        'UPDATE user_sessions SET revoked_at = NOW() WHERE id = %s AND user_id = %s AND revoked_at IS NULL;',
+        (target_session_id, user_id),
+    )
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail='Session not found')
+    log_auth_event(db, 'revoke_session', 'success', user_id=user_id, ip_address=get_client_ip(request),
+                   details={'session_id': target_session_id})
+    db.commit()
+    return {'message': 'Signed out of that device'}
+
+
+@router.post('/auth/sessions/revoke-others')
+def revoke_other_sessions(request: Request, user_id: str = Depends(get_current_user_id),
+                          session_id: int | None = Depends(get_current_session_id), db=Depends(get_db)):
+    if session_id is None:
+        raise HTTPException(status_code=400, detail='Sign in again first, so this device can be told apart from the others.')
+    cur = db.cursor()
+    cur.execute(
+        'UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND id <> %s AND revoked_at IS NULL;',
+        (user_id, session_id),
+    )
+    count = cur.rowcount
+    log_auth_event(db, 'revoke_other_sessions', 'success', user_id=user_id, ip_address=get_client_ip(request),
+                   details={'count': count})
+    db.commit()
+    return {'message': f"Signed out of {count} other device{'' if count == 1 else 's'}", 'count': count}
+
+
+# --- data export and deletion ----------------------------------------------------------------
+
+def _export_value(value):
+    """JSON for what psycopg2 hands back: numerics as numbers, timestamps as ISO text."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return str(value)
+
+
+@router.get('/auth/export')
+def export_account(user_id: str = Depends(get_current_user_id), db=Depends(get_tenant_db)):
+    """Everything the account holds, as one JSON document — the GDPR copy of the data.
+
+    Never gated on the subscription, like the CSV export: a lapsed account keeps the
+    right to its own records. Secrets (password hash, token hashes) are left out.
+    """
+    cur = db.cursor()
+    profile = load_user_profile(db, user_id)
+    tables = {
+        'vehicles': 'SELECT * FROM vehicles WHERE user_id = %s ORDER BY id;',
+        'charging_sessions': 'SELECT * FROM charging_sessions WHERE user_id = %s ORDER BY start_time, id;',
+        'expenses': 'SELECT * FROM expenses WHERE user_id = %s ORDER BY date, id;',
+        'recurring_expense_reminders': 'SELECT * FROM recurring_expense_reminders WHERE user_id = %s ORDER BY id;',
+        'places': 'SELECT * FROM places WHERE user_id = %s ORDER BY id;',
+        'notification_recipients': 'SELECT id, email, mode, vehicle_ids, confirmed_at, created_at FROM notification_recipients WHERE user_id = %s ORDER BY id;',
+        'feedback': 'SELECT id, kind, status, subject, body, created_at FROM feedback WHERE user_id = %s ORDER BY id;',
+        'subscription': 'SELECT plan, status, trial_ends_at, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = %s;',
+    }
+    data = {'exported_at': datetime.now(timezone.utc).isoformat(), 'profile': profile}
+    for name, query in tables.items():
+        table = query.split(' FROM ')[1].split()[0]
+        if table_exists(db, table):
+            cur.execute(query, (user_id,))
+            data[name] = [dict(row) for row in cur.fetchall()]
+    return JSONResponse(
+        content=json.loads(json.dumps(data, default=_export_value)),
+        headers={'Content-Disposition': 'attachment; filename="mileage-export.json"'},
+    )
+
+
+@router.post('/auth/delete-account')
+def schedule_account_deletion(payload: AccountDeletionRequest, request: Request, user_id: str = Depends(get_current_user_id),
+                              db=Depends(get_db)):
+    """Delete the account after a grace period, signing every device out now.
+
+    Thirty days rather than at once: a mistake, or a session someone else got hold of,
+    stays recoverable — signing in and cancelling is enough. After that the worker
+    removes the account and everything under it.
+    """
+    cur = db.cursor()
+    cur.execute('SELECT email, password_hash, role FROM users WHERE id = %s;', (user_id,))
+    row = cur.fetchone()
+    if not row or not pwd_context.verify(payload.password, row['password_hash']):
+        raise HTTPException(status_code=401, detail='Invalid password')
+    if row['role'] == 'admin':
+        raise HTTPException(status_code=400, detail='An admin account cannot delete itself. Hand the role to someone else first.')
+    cur.execute(
+        "UPDATE users SET deletion_scheduled_for = NOW() + make_interval(days => %s) WHERE id = %s RETURNING deletion_scheduled_for;",
+        (DELETION_GRACE_DAYS, user_id),
+    )
+    when = cur.fetchone()['deletion_scheduled_for']
+    cur.execute('UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL;', (user_id,))
+    notify(cur, user_id, row['email'], 'Your Mileage account will be deleted', [
+        f'Your account and all its records will be deleted on {when.date().isoformat()}.',
+        'Changed your mind? Sign in before then and cancel the deletion from the banner at the top.',
+    ])
+    log_auth_event(db, 'delete_account', 'scheduled', user_id=user_id, email=row['email'], ip_address=get_client_ip(request),
+                   details={'scheduled_for': when.isoformat()})
+    db.commit()
+    return {'message': 'Account scheduled for deletion', 'deletion_scheduled_for': when.isoformat()}
+
+
+@router.post('/auth/cancel-deletion')
+def cancel_account_deletion(request: Request, user_id: str = Depends(get_current_user_id), db=Depends(get_db)):
+    cur = db.cursor()
+    cur.execute(
+        'UPDATE users SET deletion_scheduled_for = NULL WHERE id = %s AND deletion_scheduled_for IS NOT NULL RETURNING email;',
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return {'message': 'No deletion was scheduled'}
+    notify(cur, user_id, row['email'], 'Your Mileage account will not be deleted', [
+        'The scheduled deletion of your account was cancelled. Everything stays as it was.',
+    ])
+    log_auth_event(db, 'delete_account', 'cancelled', user_id=user_id, email=row['email'], ip_address=get_client_ip(request))
+    db.commit()
+    return {'message': 'Deletion cancelled'}

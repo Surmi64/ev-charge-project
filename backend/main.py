@@ -17,6 +17,7 @@ try:
     from backend.routers.auth import router as auth_router
     from backend.routers.billing import router as billing_router
     from backend.routers.expenses import router as expenses_router
+    from backend.routers.feedback import router as feedback_router
     from backend.routers.health import router as health_router
     from backend.routers.insights import router as insights_router
     from backend.routers.notifications import router as notifications_router
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
     from routers.auth import router as auth_router
     from routers.billing import router as billing_router
     from routers.expenses import router as expenses_router
+    from routers.feedback import router as feedback_router
     from routers.health import router as health_router
     from routers.insights import router as insights_router
     from routers.notifications import router as notifications_router
@@ -73,6 +75,13 @@ async def attach_request_context(request: Request, call_next):
     response = await call_next(request)
     duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
     response.headers['X-Request-ID'] = request_id
+    # The API serves JSON and a few small HTML pages (mail confirm / unsubscribe); none
+    # of it may be framed, sniffed into another type, or leak its URL — the confirm and
+    # unsubscribe links carry their token in the query string.
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'no-referrer')
+    response.headers.setdefault('Cache-Control', 'no-store')
 
     if response.status_code >= 500:
         log_event(
@@ -84,7 +93,7 @@ async def attach_request_context(request: Request, call_next):
             path=request.url.path,
             status_code=response.status_code,
             duration_ms=duration_ms,
-            client_ip=request.client.host if request.client else None,
+            client_ip=request.headers.get('x-real-ip') or (request.client.host if request.client else None),
         )
 
     return response
@@ -100,7 +109,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         method=request.method,
         path=request.url.path,
         status_code=422,
-        client_ip=request.client.host if request.client else None,
+        client_ip=request.headers.get('x-real-ip') or (request.client.host if request.client else None),
         errors=exc.errors(),
     )
     return JSONResponse(status_code=422, content={'detail': exc.errors()})
@@ -117,7 +126,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             method=request.method,
             path=request.url.path,
             status_code=exc.status_code,
-            client_ip=request.client.host if request.client else None,
+            client_ip=request.headers.get('x-real-ip') or (request.client.host if request.client else None),
             detail=exc.detail,
         )
 
@@ -134,7 +143,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         method=request.method,
         path=request.url.path,
         status_code=500,
-        client_ip=request.client.host if request.client else None,
+        client_ip=request.headers.get('x-real-ip') or (request.client.host if request.client else None),
         error_type=type(exc).__name__,
         detail=str(exc),
     )
@@ -151,3 +160,4 @@ app.include_router(sessions_router)
 app.include_router(places_router)
 app.include_router(insights_router)
 app.include_router(notifications_router)
+app.include_router(feedback_router)

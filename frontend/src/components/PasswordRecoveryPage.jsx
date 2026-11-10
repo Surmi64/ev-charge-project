@@ -147,7 +147,7 @@ function PasswordRecoveryPage({ mode = 'forgot' }) {
       <AuthLayout
         kicker="Check your inbox"
         title="Reset requested"
-        subtitle={`If an account exists for ${email.trim()}, a reset token is on its way. The token expires shortly, so use it soon.`}
+        subtitle={`If an account exists for ${email.trim()}, an email with a reset link is on its way. The link works for 30 minutes and only once.`}
         footer={backToSignIn}
       >
         <Stack spacing={2.25}>

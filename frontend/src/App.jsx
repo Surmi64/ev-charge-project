@@ -14,6 +14,10 @@ import './App.css';
 import Sidebar from './components/Sidebar';
 import MobileNav from './components/MobileNav';
 import SubscriptionBanner from './components/SubscriptionBanner';
+import AccountBanner from './components/AccountBanner';
+import FeedbackPage from './components/FeedbackPage';
+import LegalPage from './components/LegalPage';
+import VerifyEmailPage from './components/VerifyEmailPage';
 import Onboarding from './components/Onboarding';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
@@ -437,6 +441,10 @@ function App() {
                 <Route path="/register" element={<AuthPage mode="register" />} />
                 <Route path="/forgot-password" element={<PasswordRecoveryPage mode="forgot" />} />
                 <Route path="/reset-password" element={<PasswordRecoveryPage mode="reset" />} />
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
+                <Route path="/terms" element={<LegalPage document="terms" />} />
+                <Route path="/privacy" element={<LegalPage document="privacy" />} />
+                <Route path="/imprint" element={<LegalPage document="imprint" />} />
                 <Route path="/*" element={
                   <PrivateRoute>
                     <Box sx={{ display: 'flex', minHeight: '100dvh', flexDirection: { xs: 'column', sm: 'row' } }}>
@@ -460,6 +468,7 @@ function App() {
                         }}
                       >
                         <Box sx={{ width: '100%', maxWidth: '1320px', mx: 'auto' }}>
+                          <AccountBanner />
                           <SubscriptionBanner />
                           <Routes>
                             <Route path="/" element={<Dashboard />} />
@@ -468,6 +477,7 @@ function App() {
                             <Route path="/analytics" element={<Analytics />} />
                             <Route path="/account" element={<Profile />} />
                             <Route path="/billing" element={<Billing />} />
+                            <Route path="/feedback" element={<FeedbackPage />} />
                             <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
               {/* The old bookmark keeps working, landing on the tab it used to be. */}
               <Route path="/admin/users" element={<Navigate to="/admin?tab=users" replace />} />

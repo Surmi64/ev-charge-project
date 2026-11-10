@@ -67,3 +67,16 @@ def get_current_user_id(token: str = Depends(oauth2_scheme)):
         return user_id
     except JWTError:
         raise credentials_exception
+
+def get_current_session_id(token: str = Depends(oauth2_scheme)) -> int | None:
+    """The refresh session this access token was issued under, if it says.
+
+    Tokens minted before the `sid` claim existed carry none; they simply cannot mark
+    which session in the list is "this device" until they are next refreshed.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    sid = payload.get('sid')
+    return int(sid) if sid is not None else None

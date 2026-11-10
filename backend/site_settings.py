@@ -64,6 +64,13 @@ SETTING_DEFINITIONS = {
         'env_default': lambda: BILLING_CURRENCY,
         'label': 'Default currency for new accounts',
     },
+    # Off until outgoing mail works: with it on, an account that cannot receive the
+    # confirmation link could never record anything.
+    'require_email_verification': {
+        'coerce': _bool,
+        'env_default': lambda: False,
+        'label': 'Require a confirmed email before recording',
+    },
     'maintenance_notice': {
         'coerce': _notice,
         'env_default': lambda: '',

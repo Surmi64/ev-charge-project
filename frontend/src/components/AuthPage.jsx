@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Link, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, FormHelperText, Link, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
@@ -35,6 +35,7 @@ const postJson = async (path, body) => {
 const AuthPage = ({ mode = 'login' }) => {
   const [tab, setTab] = useState(mode === 'register' ? REGISTER : LOGIN);
   const [values, setValues] = useState({ username: '', email: '', password: '' });
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [touched, setTouched] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
@@ -48,6 +49,7 @@ const AuthPage = ({ mode = 'login' }) => {
   const usernameRef = useRef(null);
   const emailRef = useRef(null);
   const passwordRef = useRef(null);
+  const termsRef = useRef(null);
 
   // Falls back to the sign-in tab when an admin has closed registration, including
   // for someone who followed a /register link. The server refuses these anyway; this
@@ -78,8 +80,9 @@ const AuthPage = ({ mode = 'login' }) => {
     else if (isRegister && !isPasswordValid(values.password)) {
       next.password = 'Password does not meet all the requirements below.';
     }
+    if (isRegister && !termsAccepted) next.terms = 'Please accept the terms to create an account.';
     return next;
-  }, [isRegister, values]);
+  }, [isRegister, values, termsAccepted]);
 
   const setField = (name) => (event) => {
     setValues((previous) => ({ ...previous, [name]: event.target.value }));
@@ -102,13 +105,13 @@ const AuthPage = ({ mode = 'login' }) => {
     event.preventDefault();
     if (submitting) return;
 
-    const fieldOrder = isRegister ? ['username', 'email', 'password'] : ['email', 'password'];
+    const fieldOrder = isRegister ? ['username', 'email', 'password', 'terms'] : ['email', 'password'];
     const firstInvalid = fieldOrder.find((name) => errors[name]);
     if (firstInvalid) {
       // Reveal every message at once, then put the cursor on the first problem rather
       // than leaving the user to hunt for it.
-      setTouched({ username: true, email: true, password: true });
-      ({ username: usernameRef, email: emailRef, password: passwordRef })[firstInvalid].current?.focus();
+      setTouched({ username: true, email: true, password: true, terms: true });
+      ({ username: usernameRef, email: emailRef, password: passwordRef, terms: termsRef })[firstInvalid].current?.focus();
       return;
     }
 
@@ -121,6 +124,7 @@ const AuthPage = ({ mode = 'login' }) => {
           username: values.username.trim(),
           email: values.email.trim(),
           password: values.password,
+          terms_accepted: termsAccepted,
         });
         // Straight in rather than bouncing to the sign-in form: the credentials were
         // just typed and verified, so asking for them again is pure friction.
@@ -236,6 +240,31 @@ const AuthPage = ({ mode = 'login' }) => {
             autoComplete={isRegister ? 'new-password' : 'current-password'}
             showPolicy={isRegister}
           />
+
+          {isRegister ? (
+            <Box>
+              <FormControlLabel
+                sx={{ alignItems: 'flex-start', mr: 0 }}
+                control={(
+                  <Checkbox
+                    inputRef={termsRef}
+                    checked={termsAccepted}
+                    onChange={(event) => setTermsAccepted(event.target.checked)}
+                    sx={{ mt: -0.75 }}
+                  />
+                )}
+                label={(
+                  <Typography variant="body2">
+                    I accept the{' '}
+                    <Link href="/terms" target="_blank" rel="noopener">terms of service</Link>
+                    {' '}and have read the{' '}
+                    <Link href="/privacy" target="_blank" rel="noopener">privacy notice</Link>.
+                  </Typography>
+                )}
+              />
+              {touched.terms && errors.terms ? <FormHelperText error>{errors.terms}</FormHelperText> : null}
+            </Box>
+          ) : null}
 
           {!isRegister ? (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: -0.5 }}>

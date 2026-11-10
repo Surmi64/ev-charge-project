@@ -3,11 +3,13 @@ import { Box, Chip, Tab, Tabs, Typography } from '@mui/material';
 import { useSearchParams } from 'react-router-dom';
 import UserManagement from './UserManagement';
 import SiteSettings from './SiteSettings';
+import FeedbackInbox from './FeedbackInbox';
 
 // Order is the order of the tabs. Adding an area means adding a row here.
 const TABS = [
   { value: 'users', label: 'Users', render: () => <UserManagement embedded /> },
   { value: 'site', label: 'Site settings', render: () => <SiteSettings /> },
+  { value: 'feedback', label: 'Feedback', render: () => <FeedbackInbox /> },
 ];
 
 /**

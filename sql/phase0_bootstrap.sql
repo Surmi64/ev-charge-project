@@ -54,6 +54,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS fuel_comparison_enabled BOOLEAN NOT N
 ALTER TABLE users ADD COLUMN IF NOT EXISTS cost_per_km_includes_expenses BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+-- Account lifecycle (Alembic 20261110_000023): which terms were accepted, a pending
+-- self-service deletion, and one-off mails already sent.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_scheduled_for TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_uidx ON users (LOWER(username));
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_uidx ON users (LOWER(email));
@@ -67,6 +73,9 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     last_used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(255);
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip_address VARCHAR(64);
 
 CREATE UNIQUE INDEX IF NOT EXISTS user_sessions_token_hash_uidx ON user_sessions (token_hash);
 CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
@@ -99,6 +108,29 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE UNIQUE INDEX IF NOT EXISTS password_reset_tokens_token_hash_uidx ON password_reset_tokens (token_hash);
 CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id_idx ON password_reset_tokens (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS password_reset_tokens_user_status_expires_idx ON password_reset_tokens (user_id, used_at, expires_at DESC);
+
+-- Proof that an address belongs to the account: sign-up and a changed address.
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS email_verification_tokens_hash_uidx ON email_verification_tokens (token_hash);
+CREATE INDEX IF NOT EXISTS email_verification_tokens_user_idx ON email_verification_tokens (user_id, created_at DESC);
+
+-- Attempts per rate-limit key, so the limits survive a restart and are shared between workers.
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    id BIGSERIAL PRIMARY KEY,
+    key VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS rate_limit_events_key_idx ON rate_limit_events (key, created_at DESC);
 
 INSERT INTO users (username, email, password_hash, role, theme_mode)
 SELECT 'Admin', 'surmi64@gmail.com', '$2b$12$5WwnQf2wwMX.8.3fMDfrwO95UVYSrIOyVJYCPVkoz3nojQmMM8FhW', 'admin', 'dark'
@@ -227,6 +259,44 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
 );
 
 -- ---------------------------------------------------------------------------
+-- Feedback: ideas, bug reports and complaints, with their reply thread
+-- (Alembic 20261110_000023)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id BIGSERIAL PRIMARY KEY,
+    -- SET NULL, not CASCADE: a complaint and its answer must outlive the account
+    -- (the purge deletes ideas and bug reports itself). contact_email keeps who it was.
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    contact_email VARCHAR(255),
+    kind VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'new',
+    subject VARCHAR(200) NOT NULL,
+    body TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    due_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT feedback_kind_chk CHECK (kind IN ('idea', 'bug', 'complaint')),
+    CONSTRAINT feedback_status_chk CHECK (status IN ('new', 'in_progress', 'planned', 'answered', 'resolved', 'declined'))
+);
+
+CREATE INDEX IF NOT EXISTS feedback_user_idx ON feedback (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback (status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS feedback_messages (
+    id BIGSERIAL PRIMARY KEY,
+    feedback_id BIGINT NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    author_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    from_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS feedback_messages_feedback_idx ON feedback_messages (feedback_id, created_at);
+
+-- ---------------------------------------------------------------------------
 -- New-record notifications (Alembic 20261110_000022)
 --
 -- Who hears about a new charge or fill-up, and the queue a background worker sends
@@ -263,7 +333,7 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     send_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at TIMESTAMPTZ,
-    CONSTRAINT notification_outbox_kind_chk CHECK (kind IN ('session', 'digest', 'confirm', 'test')),
+    CONSTRAINT notification_outbox_kind_chk CHECK (kind IN ('session', 'digest', 'confirm', 'test', 'system')),
     CONSTRAINT notification_outbox_status_chk CHECK (status IN ('pending', 'sent', 'failed'))
 );
 
@@ -436,8 +506,9 @@ BEGIN
             tenant_table || '_tenant_isolation', tenant_table);
     END LOOP;
 
-    -- Billing metadata: the owner, plus admins doing user management.
-    FOREACH admin_table IN ARRAY ARRAY['subscriptions']
+    -- Billing metadata and feedback: the owner, plus admins doing user management or
+    -- answering submissions.
+    FOREACH admin_table IN ARRAY ARRAY['subscriptions', 'feedback', 'feedback_messages']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', admin_table);
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', admin_table);
@@ -465,7 +536,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20261110_000022'
+SELECT '20261110_000023'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

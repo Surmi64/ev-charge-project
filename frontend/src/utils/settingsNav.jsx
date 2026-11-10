@@ -2,6 +2,7 @@ import React from 'react';
 import {
   CreditCard as BillingIcon,
   AdminPanelSettings as AdminIcon,
+  Feedback as FeedbackIcon,
 } from '@mui/icons-material';
 
 /**
@@ -23,6 +24,12 @@ export const getSettingsItems = (user) => {
       icon: <BillingIcon />,
       path: '/billing',
     },
+    {
+      text: 'Feedback',
+      description: 'Ideas, bug reports and complaints',
+      icon: <FeedbackIcon />,
+      path: '/feedback',
+    },
   ];
 
   if (user?.role === 'admin') {
@@ -30,7 +37,7 @@ export const getSettingsItems = (user) => {
     // on the instance, not just this one.
     items.push({
       text: 'Admin',
-      description: 'Users and site settings for the whole instance',
+      description: 'Users, feedback and site settings for the whole instance',
       icon: <AdminIcon />,
       path: '/admin',
       danger: true,
