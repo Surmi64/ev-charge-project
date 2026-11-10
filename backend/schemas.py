@@ -159,3 +159,12 @@ class NotificationRecipientCreate(BaseModel):
 class NotificationRecipientUpdate(BaseModel):
     mode: Optional[str] = None
     vehicle_ids: Optional[list[int]] = None
+
+
+class PlaceAssignRequest(BaseModel):
+    session_ids: list[int]
+    # Either an existing place, or a new one: a name and where it is.
+    place_id: Optional[int] = None
+    name: Optional[str] = Field(None, max_length=120)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)

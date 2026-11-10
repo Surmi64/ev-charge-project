@@ -479,6 +479,13 @@ const Analytics = () => {
   };
   const stopsSlices = buildProviderSlices(providers, 'record_count', providerColors, sliceGreys);
   const energySlices = buildProviderSlices(providers, 'energy_kwh', providerColors, sliceGreys);
+  // The map paints each point in its provider's ring colour. Only the providers the
+  // Stops ring names get one; the rest are its "more" slice, grey on the map as well.
+  const mapProviderColors = new Map(
+    stopsSlices
+      .filter((slice) => slice.key !== '__tail' && slice.key !== '__unnamed')
+      .map((slice) => [slice.key.toLowerCase(), { name: slice.name, color: slice.color }]),
+  );
   const distance = buildMonthlyDistance(
     data.monthly_distance, data.vehicle_stats, fmt, COLORS, sliceGreys.tailColor,
   );
@@ -1055,7 +1062,7 @@ const Analytics = () => {
             )}
           </Card>
 
-          <ChargingMap range={range} vehicleFilter={vehicleFilter} />
+          <ChargingMap range={range} vehicleFilter={vehicleFilter} providerColors={mapProviderColors} />
 
         </>
       )}

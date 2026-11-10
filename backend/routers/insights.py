@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +10,7 @@ try:
     from backend.db import column_exists, get_db, get_vehicle_column
     from backend.forecast import build_forecast
     from backend.fuel_comparison import annotate_trend, resolve_basis
-    from backend.providers import aggregate_providers, collect_operators
+    from backend.providers import aggregate_providers, collect_operators, derive_provider
     from backend.routers.vehicles import has_archive_support
 except ModuleNotFoundError:
     from activity import get_activity_feed
@@ -18,7 +19,7 @@ except ModuleNotFoundError:
     from db import column_exists, get_db, get_vehicle_column
     from forecast import build_forecast
     from fuel_comparison import annotate_trend, resolve_basis
-    from providers import aggregate_providers, collect_operators
+    from providers import aggregate_providers, collect_operators, derive_provider
     from routers.vehicles import has_archive_support
 
 router = APIRouter(tags=['insights'])
@@ -1480,24 +1481,29 @@ def get_analytics_map(
         filters.append('cs.start_time < %s')
         params.append(end_date.isoformat())
 
-    cur.execute(
-        f"""
-        WITH located AS (
+    located_cte = f"""
+        located AS (
             SELECT cs.session_type, cs.start_time, cs.kwh, cs.fuel_liters, cs.cost_amount, cs.source,
-                   cs.place_id, p.name AS place_name,
+                   cs.notes, cs.place_id, p.name AS place_name,
                    COALESCE(p.latitude, cs.latitude) AS lat,
                    COALESCE(p.longitude, cs.longitude) AS lng
             FROM charging_sessions cs
             JOIN vehicles v ON v.id = cs.{vehicle_column}
             LEFT JOIN places p ON p.id = cs.place_id
             WHERE {' AND '.join(filters)}
-        ),
+        )"""
+    point_key = (
+        "CASE WHEN place_id IS NOT NULL THEN 'place-' || place_id "
+        f"ELSE 'grid-' || ROUND(lat, {MAP_GRID_DECIMALS}) || ',' || ROUND(lng, {MAP_GRID_DECIMALS}) END"
+    )
+    cur.execute(
+        f"""
+        WITH {located_cte},
         totals AS (
             SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE lat IS NOT NULL) AS located FROM located
         )
         SELECT
-            CASE WHEN place_id IS NOT NULL THEN 'place-' || place_id
-                 ELSE 'grid-' || ROUND(lat, {MAP_GRID_DECIMALS}) || ',' || ROUND(lng, {MAP_GRID_DECIMALS}) END AS key,
+            {point_key} AS key,
             MAX(place_name) AS name,
             AVG(lat) AS lat,
             AVG(lng) AS lng,
@@ -1533,6 +1539,34 @@ def get_analytics_map(
         )
         coverage = {'records': _int((cur.fetchone() or {}).get('total')), 'located': 0}
 
+    # Each point is filed under a provider exactly as the Providers rings file it — same
+    # derivation, same account-wide operator vocabulary — so the page can paint a dot in
+    # its provider's colour and the two pictures agree. A point whose records name more
+    # than one provider takes the most frequent.
+    provider_by_key: dict[str, str] = {}
+    if rows:
+        cur.execute(
+            '''
+            SELECT place_name, source, notes
+            FROM vehicle_events
+            WHERE user_id = %s AND event_type IN ('charging', 'fueling');
+            ''',
+            [user_id],
+        )
+        operators = collect_operators(cur.fetchall())
+        cur.execute(
+            f"""
+            WITH {located_cte}
+            SELECT {point_key} AS key, place_name, source, notes FROM located WHERE lat IS NOT NULL;
+            """,
+            params,
+        )
+        votes: dict[str, Counter] = {}
+        for row in cur.fetchall():
+            label = derive_provider(row.get('place_name'), row.get('source'), row.get('notes'), operators)
+            votes.setdefault(row['key'], Counter())[label.lower()] += 1
+        provider_by_key = {key: counter.most_common(1)[0][0] for key, counter in votes.items()}
+
     points = []
     for row in rows:
         charging_kwh = _float(row.get('charging_kwh'))
@@ -1549,5 +1583,7 @@ def get_analytics_map(
             'kind': 'both' if row['has_charging'] and row['has_fueling'] else ('fueling' if row['has_fueling'] else 'charging'),
             'last_at': row['last_at'].isoformat() if row.get('last_at') else None,
             'top_source': row.get('top_source'),
+            # Lower-cased, the way the rings bucket names; '' when nothing names one.
+            'provider': provider_by_key.get(row['key'], ''),
         })
     return {'points': points, 'coverage': coverage}

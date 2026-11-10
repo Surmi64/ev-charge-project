@@ -1,17 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Card, Stack, Typography } from '@mui/material';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Button, Card, Stack, Typography } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useAuth } from '../context/useAuth';
 import { apiFetch } from '../utils/api';
 import { createFormatters } from '../utils/units';
+import { DARK_TILE_FILTER, TILE_ATTRIBUTION, TILE_URL } from '../utils/mapTiles';
+import AssignPlacesDialog from './AssignPlacesDialog';
 
-// OpenStreetMap's own tiles, with the attribution their policy requires. Fine for an
-// account's own map at this traffic; a public launch needs a tile provider with an
-// agreement (MapTiler, Stadia) — swap the URL and attribution here.
-const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const MAP_HEIGHT = { xs: 300, md: 380 };
 
 const radiusFor = (visits, maxVisits) => 6 + 16 * Math.sqrt(visits / Math.max(maxVisits, 1));
@@ -21,13 +18,18 @@ const reducedMotion = () => typeof window !== 'undefined'
 
 /**
  * Where the account charges and fuels, on a map: a dot per place, sized by how often
- * it is used and coloured by what a kWh costs there relative to the account's other
- * places. Covers the same range and vehicles as the rest of the Analytics page.
+ * it is used and coloured by its provider. Covers the same range and vehicles as the
+ * rest of the Analytics page.
+ *
+ * The colours are the Providers rings' own, handed down as `providerColors` (keyed by
+ * the lower-cased name, as the server files each point): a provider is one colour
+ * wherever it appears on the page. Providers past the rings' top five share the
+ * rings' "more" grey, and points nothing names stay a quieter grey still.
  *
  * The popup is built from DOM nodes with textContent rather than an HTML string:
  * place names are typed by the user, and Leaflet renders a string popup as markup.
  */
-const ChargingMap = ({ range, vehicleFilter }) => {
+const ChargingMap = ({ range, vehicleFilter, providerColors }) => {
   const theme = useTheme();
   const { user } = useAuth();
   const fmt = useMemo(() => createFormatters(user), [user]);
@@ -35,14 +37,23 @@ const ChargingMap = ({ range, vehicleFilter }) => {
   const mapRef = useRef(null);
   const layerRef = useRef(null);
   const [data, setData] = useState(null);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [reload, setReload] = useState(0);
 
   const dark = theme.palette.mode === 'dark';
-  const colors = useMemo(() => ({
-    cheap: theme.palette.success.main,
-    mid: theme.palette.warning.main,
-    pricey: theme.palette.error.main,
-    fuel: theme.palette.text.secondary,
-  }), [theme]);
+  // The rings paint their two greys translucent, which over map tiles all but
+  // vanishes; on the map they are the solid greys of the same order.
+  const otherColor = theme.palette.text.secondary;
+  const unnamedColor = theme.palette.text.disabled;
+  // The parent builds a fresh Map on every render; keyed by content, so the markers
+  // are only redrawn when a colour actually changes.
+  const colorKey = JSON.stringify([...(providerColors || new Map())]);
+  const palette = useMemo(() => new Map(JSON.parse(colorKey)), [colorKey]);
+  const styleFor = useCallback((point) => {
+    if (!point.provider) return { color: unnamedColor, label: 'Unnamed', dashArray: '3 3' };
+    const named = palette.get(point.provider);
+    return named ? { color: named.color, label: named.name } : { color: otherColor, label: 'Other providers' };
+  }, [palette, otherColor, unnamedColor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,7 +63,7 @@ const ChargingMap = ({ range, vehicleFilter }) => {
       .then((json) => { if (!cancelled) setData(json); })
       .catch(() => { if (!cancelled) setData(null); });
     return () => { cancelled = true; };
-  }, [range, vehicleFilter]);
+  }, [range, vehicleFilter, reload]);
 
   // The map itself is created once; points are redrawn into one layer group.
   useEffect(() => {
@@ -77,19 +88,6 @@ const ChargingMap = ({ range, vehicleFilter }) => {
     };
   }, []);
 
-  // Cheap / middling / pricey by the account's own spread, not by fixed prices: what
-  // counts as expensive is different in every country and every currency.
-  const priceBand = useMemo(() => {
-    const prices = (data?.points || [])
-      .map((point) => point.avg_cost_per_kwh)
-      .filter((value) => value != null)
-      .sort((a, b) => a - b);
-    if (prices.length < 3) return () => 'mid';
-    const low = prices[Math.floor(prices.length / 3)];
-    const high = prices[Math.floor((2 * prices.length) / 3)];
-    return (value) => (value < low ? 'cheap' : value >= high ? 'pricey' : 'mid');
-  }, [data]);
-
   useEffect(() => {
     const map = mapRef.current;
     const layer = layerRef.current;
@@ -100,13 +98,14 @@ const ChargingMap = ({ range, vehicleFilter }) => {
 
     const maxVisits = Math.max(...points.map((point) => point.visits));
     points.forEach((point) => {
-      const band = point.avg_cost_per_kwh == null ? 'fuel' : priceBand(point.avg_cost_per_kwh);
+      const style = styleFor(point);
       const marker = L.circleMarker([point.latitude, point.longitude], {
         radius: radiusFor(point.visits, maxVisits),
-        color: colors[band],
+        color: style.color,
         weight: 2,
-        fillColor: colors[band],
-        fillOpacity: 0.35,
+        dashArray: style.dashArray,
+        fillColor: style.color,
+        fillOpacity: 0.4,
       });
 
       const popup = document.createElement('div');
@@ -114,6 +113,7 @@ const ChargingMap = ({ range, vehicleFilter }) => {
       title.textContent = point.name || point.top_source || 'Unnamed spot';
       popup.appendChild(title);
       const lines = [
+        point.provider && style.label !== title.textContent ? style.label : null,
         `${point.visits} record${point.visits === 1 ? '' : 's'}`,
         point.total_kwh ? fmt.energy(point.total_kwh) : null,
         point.total_liters ? fmt.volume(point.total_liters) : null,
@@ -129,20 +129,44 @@ const ChargingMap = ({ range, vehicleFilter }) => {
       marker.bindPopup(popup);
       marker.addTo(layer);
     });
+  }, [data, styleFor, fmt]);
 
+  // Framed only when the data changes, so a recolour never throws away where the
+  // reader had panned to.
+  useEffect(() => {
+    const map = mapRef.current;
+    const points = data?.points || [];
+    if (!map || !points.length) return;
     const bounds = L.latLngBounds(points.map((point) => [point.latitude, point.longitude]));
     map.fitBounds(bounds, { padding: [32, 32], maxZoom: 14, animate: !reducedMotion() });
-  }, [data, colors, priceBand, fmt]);
+  }, [data]);
 
   const coverage = data?.coverage;
   const points = data?.points || [];
+  // Only what the map actually shows, in the rings' order, then the two greys.
+  const legend = useMemo(() => {
+    const shown = new Map();
+    (data?.points || []).forEach((point) => {
+      const style = styleFor(point);
+      shown.set(style.label, style);
+    });
+    const order = [...palette.values()].map((entry) => entry.name);
+    return [...shown.values()].sort((a, b) => {
+      const rank = (style) => {
+        const index = order.indexOf(style.label);
+        if (index >= 0) return index;
+        return style.label === 'Other providers' ? order.length : order.length + 1;
+      };
+      return rank(a) - rank(b);
+    });
+  }, [data, styleFor, palette]);
 
   return (
     <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
       <Typography variant="h6" fontWeight={700} sx={{ mb: 0.5 }}>Where you charge</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Every place with a location on its records. Bigger dots are used more often; the
-        colour is what a kWh costs there compared with your other places.
+        Every place with a location on its records, in the same colours as Providers.
+        Bigger dots are used more often; tap one for what it cost.
       </Typography>
 
       <Box
@@ -156,9 +180,7 @@ const ChargingMap = ({ range, vehicleFilter }) => {
           // Leaflet's own stacking reaches z-index 1000, which would sit over the app's
           // dialogs and menus. A new stacking context keeps all of it inside the card.
           isolation: 'isolate',
-          // OpenStreetMap only draws light tiles; inverted, they sit in a dark page
-          // instead of glaring out of it.
-          '& .leaflet-tile-pane': dark ? { filter: 'invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9)' } : {},
+          '& .leaflet-tile-pane': dark ? { filter: DARK_TILE_FILTER } : {},
           '& .leaflet-container': { background: theme.palette.background.default, font: 'inherit' },
           '& .leaflet-control-attribution': { fontSize: 10 },
         }}
@@ -181,21 +203,34 @@ const ChargingMap = ({ range, vehicleFilter }) => {
         justifyContent="space-between" sx={{ mt: 1.5, minHeight: 24 }}
       >
         <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          {[['cheap', 'Cheaper / kWh'], ['mid', 'Middle'], ['pricey', 'Pricier / kWh'], ['fuel', 'Fuel only']].map(([key, label]) => (
-            <Stack key={key} direction="row" spacing={0.75} alignItems="center">
-              <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: colors[key] }} />
-              <Typography variant="caption" color="text.secondary">{label}</Typography>
+          {legend.map((style) => (
+            <Stack key={style.label} direction="row" spacing={0.75} alignItems="center">
+              <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: style.color }} />
+              <Typography variant="caption" color="text.secondary">{style.label}</Typography>
             </Stack>
           ))}
         </Stack>
         {coverage && coverage.records > 0 ? (
-          <Typography variant="caption" color="text.secondary">
-            {coverage.located === coverage.records
-              ? `All ${coverage.records} records have a location.`
-              : `${coverage.located} of ${coverage.records} records have a location.`}
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography variant="caption" color="text.secondary">
+              {coverage.located === coverage.records
+                ? `All ${coverage.records} records have a location.`
+                : `${coverage.located} of ${coverage.records} records have a location.`}
+            </Typography>
+            {coverage.located < coverage.records ? (
+              <Button size="small" onClick={() => setAssignOpen(true)}>Add places to older records</Button>
+            ) : null}
+          </Stack>
         ) : null}
       </Stack>
+
+      <AssignPlacesDialog
+        open={assignOpen}
+        onClose={(changed) => {
+          setAssignOpen(false);
+          if (changed) setReload((count) => count + 1);
+        }}
+      />
     </Card>
   );
 };
