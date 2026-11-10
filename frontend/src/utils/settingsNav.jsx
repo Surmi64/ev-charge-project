@@ -19,23 +19,28 @@ import {
  */
 export const getSettingsItems = (user) => {
   const items = [
-    {
-      text: 'Subscription',
-      description: 'Plan, trial status and billing',
-      icon: <BillingIcon />,
-      path: '/billing',
-    },
+    // `primary`: on desktop these sit in the sidebar's main navigation rather than
+    // under Settings. A phone's bottom bar has no room past its five, so there they
+    // stay here, at the top of the Account page's list.
     {
       text: 'Fleet',
       description: 'Drivers and managers on your vehicles',
       icon: <FleetIcon />,
       path: '/fleet',
+      primary: true,
     },
     {
       text: 'Feedback',
       description: 'Ideas, bug reports and complaints',
       icon: <FeedbackIcon />,
       path: '/feedback',
+      primary: true,
+    },
+    {
+      text: 'Subscription',
+      description: 'Plan, trial status and billing',
+      icon: <BillingIcon />,
+      path: '/billing',
     },
   ];
 
