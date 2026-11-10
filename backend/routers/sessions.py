@@ -4,6 +4,7 @@ try:
     from backend.auth_utils import get_current_user_id
     from backend.billing import get_tenant_db, require_write_access
     from backend.db import column_exists, get_vehicle_column
+    from backend.notifications import enqueue_session_notifications
     from backend.places import resolve_place
     from backend.schemas import ChargingSessionCreate
     from backend.vehicle_events import delete_vehicle_event_by_legacy, sync_session_to_vehicle_event
@@ -12,6 +13,7 @@ except ModuleNotFoundError:
     from auth_utils import get_current_user_id
     from billing import get_tenant_db, require_write_access
     from db import column_exists, get_vehicle_column
+    from notifications import enqueue_session_notifications
     from places import resolve_place
     from schemas import ChargingSessionCreate
     from vehicle_events import delete_vehicle_event_by_legacy, sync_session_to_vehicle_event
@@ -177,6 +179,7 @@ def add_charging_session(session: ChargingSessionCreate, user_id: str = Depends(
         )
         session_id = cur.fetchone()['id']
         sync_session_to_vehicle_event(db, session_id)
+        enqueue_session_notifications(db, user_id, session_id)
         db.commit()
         return {'status': 'success', 'session_id': session_id}
     except HTTPException:

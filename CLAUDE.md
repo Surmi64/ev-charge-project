@@ -91,11 +91,12 @@ Cost per 100 km converts by *dividing* by the distance factor, since 100 miles i
 
 - `main.py` — app assembly, CORS, request-ID middleware, structured JSON exception handlers
 - `billing.py` — subscription state, `get_tenant_db`, `require_write_access`
-- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights`, `health`
+- `routers/` — `auth`, `admin`, `billing`, `vehicles`, `expenses`, `sessions`, `activity`, `insights` (including `/analytics/map`), `places`, `notifications`, `health`
 - `config.py` — env-driven; refuses to start outside development without a non-default `JWT_SECRET_KEY`, and keeps the superseded GarageOS default on the rejection list
 - `forecast.py` — year-end cost projection; de-seasonalises history before re-applying a seasonal curve, so the same curve must be used in both directions
 - `climate.py` — monthly consumption multipliers derived from per-zone temperature normals and a heat-pump COP model. The curves are normalised to mean 1 and carry only the *shape* of the year; the level always comes from the account's own cost per km. `scripts/calibrate-climate.py` checks the temperate zone still reproduces the published fleet penalties and exits non-zero if it drifts
 - `places.py` — matches a coordinate to a named place the account already uses. `places.visit_count` weights the stored position and counts only trusted fixes; the number shown to the user comes from `count_records_at`, not from that column. Geolocation needs a secure context, so the capture button is dead over plain HTTP
+- `notifications.py` + `email_sender.py` — new-record emails. Saving a session only writes `notification_outbox` rows inside the request's transaction (under a savepoint, so a failure there never loses the record); a background thread started from `main.py`'s lifespan sends them with retries and builds the daily/weekly digests at `DIGEST_HOUR` in `APP_TIMEZONE`. The two notification tables accept `app.notifications = 'on'` in place of a tenant, for that worker and for the confirm/unsubscribe links opened without a session; the sessions behind a digest are still read with `app.user_id` set. Mail goes over SMTP (`SMTP_*`, `MAIL_FROM`, `APP_BASE_URL`); with no `SMTP_HOST`, development logs each message and any other environment leaves the queue pending
 - `vehicle_rules.py` — fuel-type rules (electric ⇒ charging, petrol/diesel ⇒ fueling, hybrid ⇒ both) plus payload normalization and ownership checks
 
 Every module uses a `try: from backend.X ... except ModuleNotFoundError: from X` shim, because the container runs from `/app` while local dev runs from the repo root. Match it in new modules.

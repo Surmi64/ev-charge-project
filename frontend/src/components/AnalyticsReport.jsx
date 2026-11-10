@@ -277,7 +277,7 @@ const AnalyticsReport = ({
           <Figure label="Distance" value={fmt.distance(summary.total_distance_km)}
             hint={`${stats.length} vehicle${stats.length === 1 ? '' : 's'}`} color={brand.primary} />
           <Figure label={`Cost per 100 ${fmt.distanceShort}`} value={huf(summary.avg_cost_per_100km)}
-            hint="across the fleet" color={brand.warning} />
+            hint={summary.cost_per_km_includes_expenses ? 'all costs' : 'charging and fuel'} color={brand.warning} />
           <Figure label="Cost per kWh" value={huf(data.avg_cost_per_kwh)}
             hint={`${Math.round(summary.total_energy_kwh || 0).toLocaleString()} kWh charged`}
             color={brand.success} />

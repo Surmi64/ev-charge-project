@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- comparison was to have no price, which is a side effect rather than a setting.
     -- (Alembic 20260731_000019)
     fuel_comparison_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Whether cost per 100 km counts every cost or only charging and fuel. Off by
+    -- default: one insurance bill otherwise dominates its month. (Alembic 20261105_000021)
+    cost_per_km_includes_expenses BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT users_reference_consumption_chk
         CHECK (reference_consumption_l_100km IS NULL OR reference_consumption_l_100km BETWEEN 1 AND 50),
@@ -48,6 +51,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS climate_zone VARCHAR(32);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_consumption_l_100km NUMERIC(4,1);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_fuel_price NUMERIC(10,2);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fuel_comparison_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS cost_per_km_includes_expenses BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 
@@ -223,6 +227,49 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
 );
 
 -- ---------------------------------------------------------------------------
+-- New-record notifications (Alembic 20261110_000022)
+--
+-- Who hears about a new charge or fill-up, and the queue a background worker sends
+-- from, so a slow mail server never slows the save itself.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS notification_recipients (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    mode VARCHAR(10) NOT NULL DEFAULT 'instant',
+    vehicle_ids BIGINT[],
+    confirmed_at TIMESTAMPTZ,
+    confirm_token_hash VARCHAR(64),
+    confirm_sent_at TIMESTAMPTZ,
+    unsubscribe_token VARCHAR(64) NOT NULL,
+    last_digest_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT notification_recipients_mode_chk CHECK (mode IN ('instant', 'daily', 'weekly'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS notification_recipients_user_email_uidx ON notification_recipients (user_id, LOWER(email));
+CREATE UNIQUE INDEX IF NOT EXISTS notification_recipients_unsubscribe_uidx ON notification_recipients (unsubscribe_token);
+
+CREATE TABLE IF NOT EXISTS notification_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_id BIGINT REFERENCES notification_recipients(id) ON DELETE CASCADE,
+    kind VARCHAR(20) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(10) NOT NULL DEFAULT 'pending',
+    attempts SMALLINT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    send_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sent_at TIMESTAMPTZ,
+    CONSTRAINT notification_outbox_kind_chk CHECK (kind IN ('session', 'digest', 'confirm', 'test')),
+    CONSTRAINT notification_outbox_status_chk CHECK (status IN ('pending', 'sent', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx ON notification_outbox (send_after) WHERE status = 'pending';
+
+-- ---------------------------------------------------------------------------
 -- Places (Alembic 20260731_000017)
 --
 -- A named spot the account keeps returning to. Separate from the coordinates on
@@ -374,6 +421,21 @@ BEGIN
             tenant_table || '_tenant_isolation', tenant_table);
     END LOOP;
 
+    -- Notification queue and recipients: the owner, plus the worker that drains the
+    -- queue for every account and the confirm / unsubscribe links opened without a session.
+    FOREACH tenant_table IN ARRAY ARRAY['notification_recipients', 'notification_outbox']
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', tenant_table);
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I;', tenant_table || '_tenant_isolation', tenant_table);
+        EXECUTE format(
+            'CREATE POLICY %I ON %I USING (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint'
+            ' OR current_setting(''app.notifications'', true) = ''on'')'
+            ' WITH CHECK (user_id = NULLIF(current_setting(''app.user_id'', true), '''')::bigint'
+            ' OR current_setting(''app.notifications'', true) = ''on'');',
+            tenant_table || '_tenant_isolation', tenant_table);
+    END LOOP;
+
     -- Billing metadata: the owner, plus admins doing user management.
     FOREACH admin_table IN ARRAY ARRAY['subscriptions']
     LOOP
@@ -403,7 +465,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-SELECT '20260802_000020'
+SELECT '20261110_000022'
 WHERE NOT EXISTS (SELECT 1 FROM alembic_version);
 
 COMMIT;

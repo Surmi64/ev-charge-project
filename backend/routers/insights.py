@@ -6,7 +6,7 @@ try:
     from backend.activity import get_activity_feed
     from backend.auth_utils import get_current_user_id
     from backend.billing import get_tenant_db, require_write_access
-    from backend.db import column_exists, get_db
+    from backend.db import column_exists, get_db, get_vehicle_column
     from backend.forecast import build_forecast
     from backend.fuel_comparison import annotate_trend, resolve_basis
     from backend.providers import aggregate_providers, collect_operators
@@ -15,7 +15,7 @@ except ModuleNotFoundError:
     from activity import get_activity_feed
     from auth_utils import get_current_user_id
     from billing import get_tenant_db, require_write_access
-    from db import column_exists, get_db
+    from db import column_exists, get_db, get_vehicle_column
     from forecast import build_forecast
     from fuel_comparison import annotate_trend, resolve_basis
     from providers import aggregate_providers, collect_operators
@@ -81,6 +81,28 @@ def _months_back(value: date, months: int) -> date:
 _TREND_BUCKETS = frozenset({'day', 'week', 'month'})
 
 
+def _includes_expenses(db, cur, user_id: str) -> bool:
+    """Whether this account's cost per 100 km counts every cost or only charging and fuel.
+
+    Off by default. Insurance, tax and servicing are paid on a calendar, not per
+    kilometre, so counting them made the month a quarterly bill landed in look like the
+    most expensive driving of the year.
+    """
+    if not column_exists(db, 'users', 'cost_per_km_includes_expenses'):
+        return False
+    # users sits outside RLS, so this needs its own predicate rather than a policy.
+    cur.execute('SELECT cost_per_km_includes_expenses FROM users WHERE id = %s;', (user_id,))
+    return bool((cur.fetchone() or {}).get('cost_per_km_includes_expenses'))
+
+
+def _cost_per_100km(session_cost, expense_cost, distance_km, include_expenses: bool):
+    distance_km = _float(distance_km)
+    if distance_km <= 0:
+        return None
+    cost = _float(session_cost) + (_float(expense_cost) if include_expenses else 0.0)
+    return cost / distance_km * 100
+
+
 def _reference_figures(db, cur, user_id: str) -> dict:
     """The account's configured comparison figures, empty on a database without them."""
     if not column_exists(db, 'users', 'reference_fuel_price'):
@@ -105,7 +127,7 @@ def _trend_bucket_for_range(normalized_range: str) -> str:
     return {'30d': 'day', '90d': 'week'}.get(normalized_range, 'month')
 
 
-def _serialize_trend_row(row: dict) -> dict:
+def _serialize_trend_row(row: dict, include_expenses: bool = False) -> dict:
     total_cost = _float(row.get('total_cost'))
     total_distance_km = _float(row.get('total_distance_km'))
 
@@ -120,7 +142,9 @@ def _serialize_trend_row(row: dict) -> dict:
         # Not sent to the client: the petrol comparison reads it and drops it again.
         'combustion_distance_km': _float(row.get('combustion_distance_km')),
         'total_cost': total_cost,
-        'avg_cost_per_100km': (total_cost / total_distance_km * 100) if total_distance_km > 0 else 0,
+        'avg_cost_per_100km': _cost_per_100km(
+            row.get('session_cost'), row.get('expense_cost'), total_distance_km, include_expenses,
+        ) or 0,
     }
 
 
@@ -144,7 +168,7 @@ def _empty_period(month: str) -> dict:
 ROLLING_WINDOW_DAYS = 30
 
 
-def _fetch_window(cur, user_id: str, db, start: date, end: date) -> dict:
+def _fetch_window(cur, user_id: str, db, start: date, end: date, include_expenses: bool = False) -> dict:
     """Totals for [start, end), whatever calendar buckets that range straddles."""
     rows = _fetch_trend_stats(cur, user_id, db=db, bucket='month', start_date=start, end_date=end)
     window = _empty_period(start.isoformat())
@@ -155,8 +179,9 @@ def _fetch_window(cur, user_id: str, db, start: date, end: date) -> dict:
         for key in ('total_energy_kwh', 'session_cost', 'session_count', 'expense_cost',
                     'expense_count', 'total_distance_km', 'total_cost'):
             window[key] += row[key]
-    if window['total_distance_km'] > 0:
-        window['avg_cost_per_100km'] = window['total_cost'] / window['total_distance_km'] * 100
+    window['avg_cost_per_100km'] = _cost_per_100km(
+        window['session_cost'], window['expense_cost'], window['total_distance_km'], include_expenses,
+    ) or 0
     return window
 
 
@@ -188,7 +213,8 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                     COALESCE(MAX(ve.odometer_km), v.starting_odometer_km) - COALESCE(v.starting_odometer_km, MIN(ve.odometer_km)),
                     0
                 ) AS distance_km,
-                COALESCE(SUM(ve.total_cost), 0) AS total_cost
+                COALESCE(SUM(ve.total_cost), 0) AS total_cost,
+                COALESCE(SUM(ve.total_cost) FILTER (WHERE ve.event_type IN ('charging', 'fueling')), 0) AS session_cost
             FROM vehicles v
             LEFT JOIN vehicle_events ve ON ve.vehicle_id = v.id AND ve.user_id = v.user_id
             WHERE v.user_id = %s{active_vehicles}
@@ -198,6 +224,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             SELECT
                 COALESCE(SUM(distance_km), 0) AS total_distance_km,
                 COALESCE(SUM(total_cost), 0) AS total_distance_cost,
+                COALESCE(SUM(session_cost), 0) AS total_distance_session_cost,
                 COUNT(*) FILTER (WHERE distance_km > 0) AS vehicles_with_distance
             FROM vehicle_distance_stats
         )
@@ -209,6 +236,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             event_totals.total_expenses,
             distance_totals.total_distance_km,
             distance_totals.total_distance_cost,
+            distance_totals.total_distance_session_cost,
             distance_totals.vehicles_with_distance
         FROM event_totals
         CROSS JOIN distance_totals;
@@ -216,6 +244,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
         (user_id, user_id),
     )
     totals = cur.fetchone() or {}
+    include_expenses = _includes_expenses(db, cur, user_id)
 
     current_month_start = date.today().replace(day=1)
     previous_month_start = _get_previous_month(current_month_start)
@@ -224,6 +253,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     # as soon as an account's history outgrew the title.
     monthly_stats = _fetch_monthly_stats(
         cur, user_id, db=db, start_date=_months_back(current_month_start, 11),
+        include_expenses=include_expenses,
     )
     monthly_stats_by_key = {row['month']: row for row in monthly_stats}
     current_month = monthly_stats_by_key.get(current_month_start.strftime('%Y-%m'), _empty_period(current_month_start.strftime('%Y-%m')))
@@ -231,9 +261,9 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
 
     window_end = date.today() + timedelta(days=1)
     window_start = window_end - timedelta(days=ROLLING_WINDOW_DAYS)
-    last_window = _fetch_window(cur, user_id, db, window_start, window_end)
+    last_window = _fetch_window(cur, user_id, db, window_start, window_end, include_expenses)
     previous_window = _fetch_window(
-        cur, user_id, db, window_start - timedelta(days=ROLLING_WINDOW_DAYS), window_start,
+        cur, user_id, db, window_start - timedelta(days=ROLLING_WINDOW_DAYS), window_start, include_expenses,
     )
 
     cur.execute(
@@ -293,7 +323,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
             'session_cost': _float(row.get('session_cost')),
             'expense_cost': _float(row.get('expense_cost')),
             'distance_km': _float(row.get('distance_km')),
-            'cost_per_100km': float(row['cost_per_100km']) if row.get('cost_per_100km') is not None else None,
+            'cost_per_100km': _cost_per_100km(row.get('session_cost'), row.get('expense_cost'), row.get('distance_km'), include_expenses),
         }
         for row in vehicle_rows
     ]
@@ -378,7 +408,8 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
     total_expenses = _int(totals.get('total_expenses'))
     total_distance_km = _float(totals.get('total_distance_km'))
     total_distance_cost = _float(totals.get('total_distance_cost'))
-    avg_cost_per_100km = (total_distance_cost / total_distance_km * 100) if total_distance_km > 0 else 0
+    distance_cost = total_distance_cost if include_expenses else _float(totals.get('total_distance_session_cost'))
+    avg_cost_per_100km = (distance_cost / total_distance_km * 100) if total_distance_km > 0 else 0
     top_cost_vehicles = sorted(vehicle_stats, key=lambda vehicle: (float(vehicle.get('total_cost') or 0), vehicle.get('name') or ''), reverse=True)[:3]
 
     # Each alert carries a stable id so the client can remember which ones the user
@@ -482,7 +513,7 @@ def get_dashboard_stats(user_id: str = Depends(get_current_user_id), db=Depends(
                 'total_energy': _float(row.get('total_energy')),
                 'total_cost': _float(row.get('total_cost')),
                 'distance_km': _float(row.get('distance_km')),
-                'cost_per_100km': float(row['cost_per_100km']) if row.get('cost_per_100km') is not None else None,
+                'cost_per_100km': _cost_per_100km(row.get('session_cost'), row.get('expense_cost'), row.get('distance_km'), include_expenses),
             }
             for row in vehicle_stats
         ],
@@ -517,6 +548,7 @@ def _fetch_trend_stats(
     vehicle_id: int | None = None,
     vehicle_ids: list[int] | None = None,
     exclude_archived: bool = True,
+    include_expenses: bool = False,
 ) -> list[dict]:
     # bucket is interpolated into DATE_TRUNC, so it is whitelisted rather than bound.
     if bucket not in _TREND_BUCKETS:
@@ -638,7 +670,7 @@ def _fetch_trend_stats(
         """,
         event_params + distance_params + bucket_params,
     )
-    return [_serialize_trend_row(row) for row in cur.fetchall()]
+    return [_serialize_trend_row(row, include_expenses) for row in cur.fetchall()]
 
 
 def _fetch_longest_stretches(
@@ -1096,9 +1128,11 @@ def get_analytics_summary(
     )
     vehicle_stats = cur.fetchall()
     trend_bucket = _trend_bucket_for_range(normalized_range)
+    include_expenses = _includes_expenses(db, cur, user_id)
     trend = _fetch_trend_stats(
         cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
         vehicle_ids=selected_vehicles, exclude_archived=not explicit_selection,
+        include_expenses=include_expenses,
     )
 
     cur.execute(
@@ -1165,7 +1199,7 @@ def get_analytics_summary(
             'session_cost': _float(row.get('session_cost')),
             'expense_cost': _float(row.get('expense_cost')),
             'distance_km': _float(row.get('distance_km')),
-            'cost_per_100km': float(row['cost_per_100km']) if row.get('cost_per_100km') is not None else None,
+            'cost_per_100km': _cost_per_100km(row.get('session_cost'), row.get('expense_cost'), row.get('distance_km'), include_expenses),
             'is_archived': bool(row.get('is_archived')),
         }
         for row in vehicle_stats
@@ -1175,7 +1209,7 @@ def get_analytics_summary(
     total_energy_kwh = sum(row['total_energy'] for row in serialized_vehicle_stats)
     session_cost = sum(row['session_cost'] for row in serialized_vehicle_stats)
     expense_cost = sum(row['expense_cost'] for row in serialized_vehicle_stats)
-    avg_cost_per_100km = (total_operating_cost / total_distance_km * 100) if total_distance_km > 0 else 0
+    avg_cost_per_100km = _cost_per_100km(session_cost, expense_cost, total_distance_km, include_expenses) or 0
 
     # What the same kilometres would have cost as petrol. Added after the trend is
     # built so it uses exactly the distance the chart draws — deriving it separately
@@ -1221,6 +1255,7 @@ def get_analytics_summary(
             'session_cost': session_cost,
             'expense_cost': expense_cost,
             'avg_cost_per_100km': avg_cost_per_100km,
+            'cost_per_km_includes_expenses': include_expenses,
             'expense_share_pct': (expense_cost / total_operating_cost * 100) if total_operating_cost > 0 else 0,
             'session_share_pct': (session_cost / total_operating_cost * 100) if total_operating_cost > 0 else 0,
             'top_expense_category': {
@@ -1335,9 +1370,10 @@ def get_vehicle_analytics_drilldown(
     expense_categories = cur.fetchall()
 
     trend_bucket = _trend_bucket_for_range(normalized_range)
+    include_expenses = _includes_expenses(db, cur, user_id)
     trend = _fetch_trend_stats(
         cur, user_id, db=db, bucket=trend_bucket, start_date=start_date, end_date=end_date,
-        vehicle_id=vehicle_id, exclude_archived=False,
+        vehicle_id=vehicle_id, exclude_archived=False, include_expenses=include_expenses,
     )
     distance_km = _float(summary.get('distance_km'))
     total_cost = _float(summary.get('total_cost'))
@@ -1358,7 +1394,10 @@ def get_vehicle_analytics_drilldown(
             'total_cost': total_cost,
             'distance_km': distance_km,
             'total_records': _int(summary.get('total_records')),
-            'avg_cost_per_100km': (total_cost / distance_km * 100) if distance_km > 0 else 0,
+            'avg_cost_per_100km': _cost_per_100km(
+                summary.get('session_cost'), summary.get('expense_cost'), distance_km, include_expenses,
+            ) or 0,
+            'cost_per_km_includes_expenses': include_expenses,
         },
         'trend_bucket': trend_bucket,
         'trend': trend,
@@ -1399,3 +1438,116 @@ def get_cost_forecast(user_id: str = Depends(get_current_user_id), db=Depends(ge
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# Coordinates of records with no named place are pooled on a grid this fine — three
+# decimals is about 110 m, enough to fold one car park's scattered fixes into one dot
+# without merging the station across the road.
+MAP_GRID_DECIMALS = 3
+
+
+@router.get('/analytics/map')
+def get_analytics_map(
+    range_key: str = Query('all', alias='range'),
+    vehicle_ids: list[int] | None = Query(None, alias='vehicles'),
+    user_id: str = Depends(get_current_user_id),
+    db=Depends(get_tenant_db),
+):
+    """Where the account charges and fuels: one point per named place, plus pooled
+    coordinates for located records that never got a name.
+
+    Same range and vehicle rules as the summary, so the map always shows the records
+    the rest of the page is counting. `coverage` says how many of them carry a location
+    at all — most history predates location capture, and a map that quietly drew a
+    tenth of it would read as the whole story.
+    """
+    cur = db.cursor()
+    vehicle_column = get_vehicle_column(db)
+    _, start_date, end_date = _get_analytics_range_bounds(range_key)
+    selected_vehicles = list(vehicle_ids) if vehicle_ids is not None else None
+
+    filters = ['cs.user_id = %s']
+    params: list = [user_id]
+    if selected_vehicles is not None:
+        filters.append(f'cs.{vehicle_column} = ANY(%s)')
+        params.append(selected_vehicles)
+    elif column_exists(db, 'vehicles', 'is_archived'):
+        filters.append('v.is_archived = FALSE')
+    if start_date is not None:
+        filters.append('cs.start_time >= %s')
+        params.append(start_date.isoformat())
+    if end_date is not None:
+        filters.append('cs.start_time < %s')
+        params.append(end_date.isoformat())
+
+    cur.execute(
+        f"""
+        WITH located AS (
+            SELECT cs.session_type, cs.start_time, cs.kwh, cs.fuel_liters, cs.cost_amount, cs.source,
+                   cs.place_id, p.name AS place_name,
+                   COALESCE(p.latitude, cs.latitude) AS lat,
+                   COALESCE(p.longitude, cs.longitude) AS lng
+            FROM charging_sessions cs
+            JOIN vehicles v ON v.id = cs.{vehicle_column}
+            LEFT JOIN places p ON p.id = cs.place_id
+            WHERE {' AND '.join(filters)}
+        ),
+        totals AS (
+            SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE lat IS NOT NULL) AS located FROM located
+        )
+        SELECT
+            CASE WHEN place_id IS NOT NULL THEN 'place-' || place_id
+                 ELSE 'grid-' || ROUND(lat, {MAP_GRID_DECIMALS}) || ',' || ROUND(lng, {MAP_GRID_DECIMALS}) END AS key,
+            MAX(place_name) AS name,
+            AVG(lat) AS lat,
+            AVG(lng) AS lng,
+            COUNT(*) AS visits,
+            COALESCE(SUM(cost_amount), 0) AS total_cost,
+            SUM(kwh) AS total_kwh,
+            SUM(fuel_liters) AS total_liters,
+            SUM(cost_amount) FILTER (WHERE session_type = 'charging' AND kwh > 0) AS charging_cost,
+            SUM(kwh) FILTER (WHERE session_type = 'charging' AND kwh > 0) AS charging_kwh,
+            BOOL_OR(session_type = 'charging') AS has_charging,
+            BOOL_OR(session_type = 'fueling') AS has_fueling,
+            MAX(start_time) AS last_at,
+            MODE() WITHIN GROUP (ORDER BY source) AS top_source,
+            (SELECT total FROM totals) AS coverage_total,
+            (SELECT located FROM totals) AS coverage_located
+        FROM located
+        WHERE lat IS NOT NULL
+        GROUP BY 1
+        ORDER BY visits DESC;
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    if rows:
+        coverage = {'records': _int(rows[0]['coverage_total']), 'located': _int(rows[0]['coverage_located'])}
+    else:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS total FROM charging_sessions cs JOIN vehicles v ON v.id = cs.{vehicle_column}
+            WHERE {' AND '.join(filters)};
+            """,
+            params,
+        )
+        coverage = {'records': _int((cur.fetchone() or {}).get('total')), 'located': 0}
+
+    points = []
+    for row in rows:
+        charging_kwh = _float(row.get('charging_kwh'))
+        points.append({
+            'key': row['key'],
+            'name': row['name'],
+            'latitude': float(row['lat']),
+            'longitude': float(row['lng']),
+            'visits': _int(row['visits']),
+            'total_cost': _float(row['total_cost']),
+            'total_kwh': _float(row.get('total_kwh')),
+            'total_liters': _float(row.get('total_liters')),
+            'avg_cost_per_kwh': (_float(row.get('charging_cost')) / charging_kwh) if charging_kwh > 0 else None,
+            'kind': 'both' if row['has_charging'] and row['has_fueling'] else ('fueling' if row['has_fueling'] else 'charging'),
+            'last_at': row['last_at'].isoformat() if row.get('last_at') else None,
+            'top_source': row.get('top_source'),
+        })
+    return {'points': points, 'coverage': coverage}

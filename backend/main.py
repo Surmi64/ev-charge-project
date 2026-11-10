@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,7 +10,8 @@ from fastapi.responses import JSONResponse
 
 try:
     from backend.routers.admin import router as admin_router
-    from backend.config import CORS_ALLOW_CREDENTIALS, CORS_ALLOW_ORIGINS
+    from backend.config import CORS_ALLOW_CREDENTIALS, CORS_ALLOW_ORIGINS, NOTIFICATIONS_WORKER_ENABLED
+    from backend.notifications import start_worker
     from backend.logging_utils import configure_logging, log_event
     from backend.routers.activity import router as activity_router
     from backend.routers.auth import router as auth_router
@@ -17,12 +19,14 @@ try:
     from backend.routers.expenses import router as expenses_router
     from backend.routers.health import router as health_router
     from backend.routers.insights import router as insights_router
+    from backend.routers.notifications import router as notifications_router
     from backend.routers.places import router as places_router
     from backend.routers.sessions import router as sessions_router
     from backend.routers.vehicles import router as vehicles_router
 except ModuleNotFoundError:
     from routers.admin import router as admin_router
-    from config import CORS_ALLOW_CREDENTIALS, CORS_ALLOW_ORIGINS
+    from config import CORS_ALLOW_CREDENTIALS, CORS_ALLOW_ORIGINS, NOTIFICATIONS_WORKER_ENABLED
+    from notifications import start_worker
     from logging_utils import configure_logging, log_event
     from routers.activity import router as activity_router
     from routers.auth import router as auth_router
@@ -30,6 +34,7 @@ except ModuleNotFoundError:
     from routers.expenses import router as expenses_router
     from routers.health import router as health_router
     from routers.insights import router as insights_router
+    from routers.notifications import router as notifications_router
     from routers.places import router as places_router
     from routers.sessions import router as sessions_router
     from routers.vehicles import router as vehicles_router
@@ -37,7 +42,18 @@ except ModuleNotFoundError:
 configure_logging()
 logger = logging.getLogger('mileage.api')
 
-app = FastAPI(title="Mileage API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # The mail worker lives in the API process rather than its own container, so a
+    # deployment has nothing extra to run. It locks what it works on, so a second
+    # replica would only duplicate effort; NOTIFICATIONS_WORKER_ENABLED turns it off there.
+    stop = start_worker() if NOTIFICATIONS_WORKER_ENABLED else None
+    yield
+    if stop is not None:
+        stop.set()
+
+
+app = FastAPI(title="Mileage API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -134,3 +150,4 @@ app.include_router(activity_router)
 app.include_router(sessions_router)
 app.include_router(places_router)
 app.include_router(insights_router)
+app.include_router(notifications_router)

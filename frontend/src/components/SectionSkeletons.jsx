@@ -206,6 +206,14 @@ export function AnalyticsSkeleton() {
           ))}
         </Box>
       </Card>
+
+      {/* Where you charge: the map, then its legend line. */}
+      <Card sx={{ p: 3, borderRadius: 4, mb: 2 }}>
+        <Skeleton variant="text" width={160} height={30} />
+        <Skeleton variant="text" width="60%" height={20} sx={{ mb: 2 }} />
+        <Skeleton variant="rounded" sx={{ height: { xs: 300, md: 380 }, borderRadius: 3 }} />
+        <Skeleton variant="text" width="45%" height={24} sx={{ mt: 1.5 }} />
+      </Card>
     </Box>
   );
 }

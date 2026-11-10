@@ -5,6 +5,8 @@ import { useAuth } from '../context/useAuth';
 import UnitSettings from './UnitSettings';
 import ClimateSettings from './ClimateSettings';
 import FuelComparisonSettings from './FuelComparisonSettings';
+import CostPerKmSettings from './CostPerKmSettings';
+import NotificationSettings from './NotificationSettings';
 import AppearanceSettings from './AppearanceSettings';
 import PasswordField from './PasswordField';
 import { toast } from 'sonner';
@@ -20,6 +22,7 @@ const TABS = [
     { value: 'profile', label: 'Profile' },
     { value: 'display', label: 'Display' },
     { value: 'calculations', label: 'Calculations' },
+    { value: 'notifications', label: 'Notifications' },
     { value: 'security', label: 'Security' },
 ];
 const TAB_VALUES = TABS.map((tab) => tab.value);
@@ -316,13 +319,16 @@ const Profile = () => {
                     {tab === 'calculations' ? (
                         <Stack spacing={3}>
                             <Typography variant="body2" color="text.secondary">
-                                What Analytics assumes when it projects the year and draws the petrol comparison.
+                                What Analytics assumes when it projects the year, measures cost per distance and draws the petrol comparison.
                                 Your recorded figures are never changed by these.
                             </Typography>
+                            <CostPerKmSettings />
                             <ClimateSettings />
                             <FuelComparisonSettings />
                         </Stack>
                     ) : null}
+
+                    {tab === 'notifications' ? <NotificationSettings /> : null}
 
                     {tab === 'security' ? (
                         <SecurityLog entries={securityLog} loading={securityLoading} />

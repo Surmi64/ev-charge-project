@@ -103,7 +103,7 @@ def load_user_profile(db, user_id) -> dict | None:
         columns.append('dismissed_alerts')
     for preference in ('currency', 'distance_unit', 'volume_unit', 'climate_zone',
                        'reference_consumption_l_100km', 'reference_fuel_price',
-                       'fuel_comparison_enabled', 'onboarded_at'):
+                       'fuel_comparison_enabled', 'cost_per_km_includes_expenses', 'onboarded_at'):
         if column_exists(db, 'users', preference):
             columns.append(preference)
 
@@ -128,6 +128,7 @@ def load_user_profile(db, user_id) -> dict | None:
         value = user.get(reference)
         user[reference] = float(value) if value is not None else None
     user.setdefault('fuel_comparison_enabled', True)
+    user.setdefault('cost_per_km_includes_expenses', False)
     user['onboarded_at'] = user['onboarded_at'].isoformat() if user.get('onboarded_at') else None
     return user
 
@@ -461,6 +462,7 @@ def update_profile(
     reference_consumption_l_100km: float | None = Body(None),
     reference_fuel_price: float | None = Body(None),
     fuel_comparison_enabled: bool | None = Body(None),
+    cost_per_km_includes_expenses: bool | None = Body(None),
     onboarding_complete: bool | None = Body(None),
     user_id: str = Depends(get_current_user_id),
     db=Depends(get_db),
@@ -560,6 +562,10 @@ def update_profile(
         updates.append('fuel_comparison_enabled = %s')
         values.append(fuel_comparison_enabled)
 
+    if cost_per_km_includes_expenses is not None and column_exists(db, 'users', 'cost_per_km_includes_expenses'):
+        updates.append('cost_per_km_includes_expenses = %s')
+        values.append(cost_per_km_includes_expenses)
+
     # Skipping sets this too. The flag means "we have asked", not "they answered".
     if onboarding_complete and column_exists(db, 'users', 'onboarded_at'):
         updates.append('onboarded_at = NOW()')
@@ -588,7 +594,8 @@ def update_profile(
         for name, value in (('currency', currency), ('distance_unit', distance_unit), ('volume_unit', volume_unit), ('climate_zone', climate_zone),
                             ('reference_consumption_l_100km', reference_consumption_l_100km),
                             ('reference_fuel_price', reference_fuel_price),
-                            ('fuel_comparison_enabled', fuel_comparison_enabled)):
+                            ('fuel_comparison_enabled', fuel_comparison_enabled),
+                            ('cost_per_km_includes_expenses', cost_per_km_includes_expenses)):
             if value is not None and column_exists(db, 'users', name):
                 changed_fields.append(name)
         log_auth_event(db, 'profile_update', 'success', user_id=user_id, email=email, ip_address=get_client_ip(request), details={'fields': changed_fields})

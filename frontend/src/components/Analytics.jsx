@@ -61,6 +61,7 @@ import {
 } from '../utils/analyticsFormat';
 import AnalyticsReport from './AnalyticsReport';
 import ExportOptionsDialog from './ExportOptionsDialog';
+import ChargingMap from './ChargingMap';
 import { useAuth } from '../context/useAuth';
 import { createFormatters } from '../utils/units';
 import { buildReportTheme } from '../utils/reportTheme';
@@ -542,7 +543,8 @@ const Analytics = () => {
                 color={theme.palette.secondary.main} />
               <Figure label="Distance" value={km(summary.total_distance_km)}
                 hint={pluralize((data.vehicle_stats || []).length, 'vehicle')} color={theme.palette.primary.main} />
-              <Figure label={`Cost per 100 ${fmt.distanceShort}`} value={huf(summary.avg_cost_per_100km)} hint="across the fleet"
+              <Figure label={`Cost per 100 ${fmt.distanceShort}`} value={huf(summary.avg_cost_per_100km)}
+                hint={summary.cost_per_km_includes_expenses ? 'all costs' : 'charging and fuel'}
                 color={theme.palette.warning.main} />
               <Figure label="Cost per kWh" value={huf(data.avg_cost_per_kwh)}
                 hint={`${Math.round(summary.total_energy_kwh || 0).toLocaleString()} kWh charged`}
@@ -1052,6 +1054,8 @@ const Analytics = () => {
               </Box>
             )}
           </Card>
+
+          <ChargingMap range={range} vehicleFilter={vehicleFilter} />
 
         </>
       )}

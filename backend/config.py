@@ -53,6 +53,26 @@ DB_PASS = os.environ.get('DB_PASS', 'password')
 DB_APP_USER = os.environ.get('DB_APP_USER', DB_USER)
 DB_APP_PASS = os.environ.get('DB_APP_PASS', DB_PASS)
 
+# Where links in outgoing mail point (confirm, unsubscribe, open the record).
+APP_BASE_URL = os.environ.get('APP_BASE_URL', 'http://localhost:4242').rstrip('/')
+
+# Outgoing mail. With no SMTP_HOST, development logs each message instead of sending it,
+# and any other environment leaves the queue untouched until a server is configured.
+SMTP_HOST = os.environ.get('SMTP_HOST', '').strip()
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USERNAME = os.environ.get('SMTP_USERNAME', '').strip()
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+# 'starttls' (port 587), 'ssl' (port 465) or 'none' (a local relay only).
+SMTP_SECURITY = os.environ.get('SMTP_SECURITY', 'starttls').strip().lower()
+MAIL_FROM = os.environ.get('MAIL_FROM', 'Mileage <no-reply@localhost>').strip()
+
+# The background worker that sends queued mail and builds the digests. On by default;
+# turn it off in any extra API replica so only one process builds digests.
+NOTIFICATIONS_WORKER_ENABLED = _get_bool_env('NOTIFICATIONS_WORKER_ENABLED', True)
+# Digests go out at this local hour: daily ones every day, weekly ones on Mondays.
+APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Europe/Budapest').strip()
+DIGEST_HOUR = int(os.environ.get('DIGEST_HOUR', '7'))
+
 # Subscription plans. Amounts are in cents to avoid float rounding.
 TRIAL_DAYS = int(os.environ.get('TRIAL_DAYS', '30'))
 BILLING_CURRENCY = os.environ.get('BILLING_CURRENCY', 'EUR')

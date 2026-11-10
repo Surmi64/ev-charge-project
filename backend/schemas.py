@@ -147,3 +147,15 @@ class ChargingSessionCreate(BaseModel):
     longitude: Optional[float] = Field(None, ge=-180, le=180)
     location_accuracy_m: Optional[float] = Field(None, ge=0)
     place_name: Optional[str] = Field(None, max_length=120)
+
+
+class NotificationRecipientCreate(BaseModel):
+    email: EmailStr
+    mode: str = 'instant'
+    # None means every vehicle, including ones added later.
+    vehicle_ids: Optional[list[int]] = None
+
+
+class NotificationRecipientUpdate(BaseModel):
+    mode: Optional[str] = None
+    vehicle_ids: Optional[list[int]] = None
